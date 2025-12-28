@@ -2,14 +2,45 @@
 import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
-import { createDiscreteApi, NAlert, NButton, NCard, NConfigProvider, NForm, NFormItem, NInput, NInputNumber, NModal, NTabPane, NTabs, NSwitch, darkTheme } from "naive-ui";
+import {
+  createDiscreteApi,
+  dateEnUS,
+  dateEsAR,
+  dateFrFR,
+  dateJaJP,
+  dateKoKR,
+  dateZhCN,
+  darkTheme,
+  enUS,
+  esAR,
+  frFR,
+  jaJP,
+  koKR,
+  NAlert,
+  NButton,
+  NCard,
+  NConfigProvider,
+  NDivider,
+  NForm,
+  NFormItem,
+  NInput,
+  NInputNumber,
+  NModal,
+  NSelect,
+  NSpace,
+  NTabPane,
+  NTabs,
+  NSwitch,
+  zhCN,
+} from "naive-ui";
 
 import AddSiteModal from "./components/modals/AddSiteModal.vue";
-import ContextModal from "./components/modals/ContextModal.vue";
 import SiteSettingsModal from "./components/modals/SiteSettingsModal.vue";
+import SummaryModal from "./components/modals/SummaryModal.vue";
 import Sidebar from "./components/Sidebar.vue";
 import TopBar from "./components/TopBar.vue";
 import type { AiSite, AppConfig } from "./types";
+import { currentLanguage, setLanguage, supportedLanguages, t, type SupportedLanguage } from "./i18n";
 
 // 状态
 const sites = ref<AiSite[]>([]);
@@ -40,11 +71,12 @@ const showAddDialog = ref<boolean>(false);
 
 // 站点设置弹窗
 const showSiteSettings = ref<boolean>(false);
-const siteSettingsSite = ref<{ id: string; name: string; url: string; icon: string } | null>(null);
+const siteSettingsSite = ref<{ id: string; name: string; url: string; icon: string; summary_prompt_override?: string } | null>(null);
 
-// 上下文（按项目）
-const showContextModal = ref(false);
-const activeProjectId = ref("");
+// 总结
+const showSummaryModal = ref(false);
+const summaryText = ref("");
+const isSummarizing = ref(false);
 
 const topBarRef = ref<InstanceType<typeof TopBar> | null>(null);
 
@@ -56,6 +88,46 @@ let unlistenLoaded: UnlistenFn | null = null;
 const aiApiBaseUrl = ref("");
 const aiApiModel = ref("");
 const aiApiKey = ref("");
+
+// i18n + 总结提示词（全局）
+const language = computed(() => currentLanguage.value);
+const globalSummaryPromptTemplate = ref("");
+
+const naiveLocale = computed(() => {
+  switch (language.value) {
+    case "zh-CN":
+      return zhCN;
+    case "ja":
+      return jaJP;
+    case "ko":
+      return koKR;
+    case "fr":
+      return frFR;
+    case "es":
+      return esAR;
+    case "en":
+    default:
+      return enUS;
+  }
+});
+
+const naiveDateLocale = computed(() => {
+  switch (language.value) {
+    case "zh-CN":
+      return dateZhCN;
+    case "ja":
+      return dateJaJP;
+    case "ko":
+      return dateKoKR;
+    case "fr":
+      return dateFrFR;
+    case "es":
+      return dateEsAR;
+    case "en":
+    default:
+      return dateEnUS;
+  }
+});
 
 // 获取 AI 站点列表和配置
 async function loadSites() {
@@ -72,16 +144,23 @@ async function loadSites() {
         : EXPANDED_WIDTH;
     pinnedSiteIds.value = config.pinned_site_ids ?? [];
     recentSiteIds.value = config.recent_site_ids ?? [];
-    activeProjectId.value = config.active_project_id ?? "";
     aiApiBaseUrl.value = config.ai_api_base_url ?? "";
     aiApiModel.value = config.ai_api_model ?? "";
     aiApiKey.value = config.ai_api_key ?? "";
+    globalSummaryPromptTemplate.value = config.summary_prompt_template ?? "";
+
+    const nextLang = (config.language ?? "zh-CN") as SupportedLanguage;
+    if (supportedLanguages.some((l) => l.value === nextLang)) {
+      setLanguage(nextLang);
+    } else {
+      setLanguage("zh-CN");
+    }
 
     // 应用主题
     document.documentElement.dataset.theme = config.theme;
   } catch (error) {
     console.error("加载配置失败:", error);
-    showError("加载配置失败");
+    showError(t("common.loadConfigFailed"));
   }
 }
 
@@ -110,7 +189,7 @@ async function refreshView(siteId: string) {
     await invoke("refresh_view", { siteId });
   } catch (error) {
     console.error("刷新失败:", error);
-    showError("刷新失败");
+    showError(t("common.refreshFailed"));
   }
 }
 
@@ -123,7 +202,7 @@ async function clearCache(siteId: string) {
     }
   } catch (error) {
     console.error("清除缓存失败:", error);
-    showError("清除缓存失败");
+    showError(t("common.clearCacheFailed"));
   }
 }
 
@@ -175,7 +254,7 @@ function closeAddDialog() {
 
 async function addSite(payload: { name: string; url: string; icon: string }) {
   if (!payload.name.trim() || !payload.url.trim()) {
-    showError("请填写站点名称和 URL");
+    showError(t("common.fillNameUrl"));
     return;
   }
 
@@ -212,7 +291,7 @@ async function removeSite(siteId: string) {
 function openSiteSettings(siteId: string) {
   const site = sites.value.find((s) => s.id === siteId);
   if (!site) {
-    showError("站点不存在");
+    showError(t("common.siteNotFound"));
     return;
   }
 
@@ -221,6 +300,7 @@ function openSiteSettings(siteId: string) {
     name: site.name,
     url: site.url,
     icon: site.icon || "custom",
+    summary_prompt_override: site.summary_prompt_override ?? "",
   };
   showSiteSettings.value = true;
 }
@@ -237,9 +317,9 @@ function normalizeUrl(raw: string): string {
   return "https://" + trimmed;
 }
 
-async function saveSiteSettings(payload: { id: string; name: string; url: string; icon: string }) {
+async function saveSiteSettings(payload: { id: string; name: string; url: string; icon: string; summary_prompt_override?: string }) {
   if (!payload.name.trim() || !payload.url.trim()) {
-    showError("请填写站点名称和 URL");
+    showError(t("common.fillNameUrl"));
     return;
   }
 
@@ -251,6 +331,7 @@ async function saveSiteSettings(payload: { id: string; name: string; url: string
       name: payload.name.trim(),
       url,
       icon: payload.icon,
+      summaryPromptOverride: payload.summary_prompt_override ?? "",
     });
     await loadSites();
     closeSiteSettings();
@@ -259,6 +340,39 @@ async function saveSiteSettings(payload: { id: string; name: string; url: string
     console.error("保存站点设置失败:", error);
     showError(`保存失败: ${error}`);
   }
+}
+
+async function saveUiLanguage(value: string | null) {
+  if (!value) return;
+  const lang = value as SupportedLanguage;
+  if (!supportedLanguages.some((l) => l.value === lang)) return;
+  setLanguage(lang);
+  try {
+    await invoke("set_language", { language: lang });
+  } catch (e) {
+    console.error("保存语言失败:", e);
+  }
+}
+
+async function saveGlobalSummaryPromptTemplate() {
+  try {
+    await invoke("set_summary_prompt_template", { template: globalSummaryPromptTemplate.value });
+    try {
+      const cfg = await invoke<AppConfig>("get_config");
+      globalSummaryPromptTemplate.value = cfg.summary_prompt_template ?? globalSummaryPromptTemplate.value;
+    } catch {
+      // ignore
+    }
+    message.success(t("settings.save"));
+  } catch (e) {
+    console.error("保存总结提示词失败:", e);
+    showError(`保存失败: ${e}`);
+  }
+}
+
+async function resetGlobalSummaryPromptTemplate() {
+  globalSummaryPromptTemplate.value = "";
+  await saveGlobalSummaryPromptTemplate();
 }
 
 // ========== 一键展开/收缩侧边栏 ==========
@@ -293,8 +407,19 @@ function openSettings() {
   showSettings.value = true;
 }
 
-function openContext() {
-  showContextModal.value = true;
+async function summarizeCurrentTab() {
+  if (isSummarizing.value) return;
+  isSummarizing.value = true;
+  try {
+    const result = await invoke<string>("summarize_active_tab");
+    summaryText.value = result;
+    showSummaryModal.value = true;
+  } catch (e) {
+    console.error("总结失败:", e);
+    showError(`总结失败: ${e}`);
+  } finally {
+    isSummarizing.value = false;
+  }
 }
 
 function onSettingsSidebarWidthUpdate(value: number | null) {
@@ -309,34 +434,54 @@ async function saveAiApiSettings() {
       baseUrl: aiApiBaseUrl.value,
       model: aiApiModel.value,
       apiKey: aiApiKey.value,
+      clearKey: false,
     });
-    message.success("AI API 设置已保存");
+    aiApiKey.value = "";
+    message.success(t("settings.aiApiSaved"));
   } catch (e) {
     console.error("保存 AI API 设置失败:", e);
     showError(`保存失败: ${e}`);
   }
 }
 
+async function clearAiApiKey() {
+  const ok = window.confirm(t("settings.clearApiKeyConfirm"));
+  if (!ok) return;
+  try {
+    await invoke("set_ai_api_settings", {
+      baseUrl: aiApiBaseUrl.value,
+      model: aiApiModel.value,
+      apiKey: "",
+      clearKey: true,
+    });
+    aiApiKey.value = "";
+    message.success(t("settings.apiKeyCleared"));
+  } catch (e) {
+    console.error("清空 API Key 失败:", e);
+    showError(`清空失败: ${e}`);
+  }
+}
+
 async function resetNavigation() {
   dialog.warning({
-    title: "重置导航栏",
-    content: "将清空：置顶、最近、排序。不会删除站点本身。",
-    positiveText: "重置",
-    negativeText: "取消",
+    title: t("settings.resetNavTitle"),
+    content: t("settings.resetNavContent"),
+    positiveText: t("settings.resetNavConfirm"),
+    negativeText: t("settings.cancel"),
     onPositiveClick: async () => {
       try {
         await invoke("reset_navigation");
         await loadSites();
-        message.success("已重置");
+        message.success(t("settings.resetNavToast"));
       } catch (e) {
         console.error("重置导航栏失败:", e);
-        showError("重置导航栏失败");
+        showError(t("settings.resetNavError"));
       }
     },
   });
 }
 
-const isOverlayOpen = computed(() => showSettings.value || showAddDialog.value || showSiteSettings.value || showContextModal.value);
+const isOverlayOpen = computed(() => showSettings.value || showAddDialog.value || showSiteSettings.value || showSummaryModal.value);
 
 const pinnedSet = computed(() => new Set(pinnedSiteIds.value));
 const query = computed(() => siteSearch.value.trim().toLowerCase());
@@ -435,7 +580,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <n-config-provider :theme="naiveTheme">
+  <n-config-provider :theme="naiveTheme" :locale="naiveLocale" :date-locale="naiveDateLocale">
     <div class="app-container">
       <sidebar
         v-model:search="siteSearch"
@@ -465,7 +610,13 @@ onUnmounted(() => {
       />
 
       <div class="main-area">
-        <top-bar ref="topBarRef" :sites="sites" :current-site-id="currentView" @open-context="openContext" />
+        <top-bar
+          ref="topBarRef"
+          :sites="sites"
+          :current-site-id="currentView"
+          :summarizing="isSummarizing"
+          @summarize="summarizeCurrentTab"
+        />
 
     <!-- 加载指示器 -->
     <div v-if="loading" class="loading-bar" :style="{ left: sidebarWidth + 'px' }"></div>
@@ -474,8 +625,8 @@ onUnmounted(() => {
     <main v-if="!currentView" class="content">
       <div class="welcome-screen">
         <div class="welcome-icon">🚀</div>
-        <h2>欢迎使用 AI Hub</h2>
-        <p>点击左侧图标选择 AI 助手</p>
+        <h2>{{ t("app.welcomeTitle") }}</h2>
+        <p>{{ t("app.welcomeSubtitle") }}</p>
       </div>
     </main>
       </div>
@@ -487,12 +638,12 @@ onUnmounted(() => {
       @submit="saveSiteSettings"
       @error="showError"
     />
-    <context-modal v-model:show="showContextModal" v-model:active-project-id="activeProjectId" />
+    <summary-modal v-model:show="showSummaryModal" v-model:summary="summaryText" />
     </div>
 
     <n-modal v-model:show="showSettings" :mask-closable="true" :close-on-esc="true">
       <n-card
-        title="设置"
+        :title="t('settings.title')"
         closable
         :bordered="false"
         size="large"
@@ -502,20 +653,20 @@ onUnmounted(() => {
         @close="showSettings = false"
       >
         <n-tabs type="line" animated default-value="appearance">
-          <n-tab-pane name="appearance" tab="外观">
+          <n-tab-pane name="appearance" :tab="t('settings.tabs.appearance')">
             <n-form label-placement="left" label-width="120" size="medium">
-              <n-form-item label="深色主题">
+              <n-form-item :label="t('settings.darkTheme')">
                 <n-switch v-model:value="isDarkTheme" />
               </n-form-item>
             </n-form>
           </n-tab-pane>
 
-          <n-tab-pane name="layout" tab="布局">
+          <n-tab-pane name="layout" :tab="t('settings.tabs.layout')">
             <n-form label-placement="left" label-width="120" size="medium">
-              <n-form-item label="侧边栏展开">
+              <n-form-item :label="t('settings.sidebarExpand')">
                 <n-switch v-model:value="isSidebarExpanded" />
               </n-form-item>
-              <n-form-item label="侧边栏宽度">
+              <n-form-item :label="t('settings.sidebarWidth')">
                 <n-input-number
                   :disabled="!isSidebarExpanded"
                   :min="MIN_SIDEBAR_WIDTH"
@@ -529,37 +680,82 @@ onUnmounted(() => {
             </n-form>
           </n-tab-pane>
 
-          <n-tab-pane name="ai" tab="AI API">
-            <n-form label-placement="left" label-width="120" size="medium">
-              <n-form-item label="Base URL">
-                <n-input v-model:value="aiApiBaseUrl" placeholder="https://api.openai.com/v1" />
-              </n-form-item>
-              <n-form-item label="Model">
-                <n-input v-model:value="aiApiModel" placeholder="例如：gpt-4o-mini / deepseek-chat" />
-              </n-form-item>
-              <n-form-item label="API Key">
-                <n-input v-model:value="aiApiKey" type="password" show-password-on="click" placeholder="sk-..." />
-              </n-form-item>
-              <n-form-item>
-                <n-button type="primary" @click="saveAiApiSettings">保存</n-button>
-              </n-form-item>
-            </n-form>
+          <n-tab-pane name="language" :tab="t('settings.tabs.language')">
+            <n-space vertical size="medium">
+              <n-form label-placement="left" label-width="120" size="medium">
+                <n-form-item :label="t('settings.language')">
+                  <n-select
+                    style="width: 220px"
+                    :value="language"
+                    :options="supportedLanguages"
+                    @update:value="saveUiLanguage"
+                  />
+                </n-form-item>
+              </n-form>
+              <n-alert type="info" :show-icon="false">
+                {{ t("settings.languageHint") }}
+              </n-alert>
+            </n-space>
           </n-tab-pane>
 
-          <n-tab-pane name="advanced" tab="高级">
+          <n-tab-pane name="ai" :tab="t('settings.tabs.ai')">
+            <n-space vertical size="large">
+              <n-form label-placement="left" label-width="120" size="medium">
+                <n-form-item label="Base URL">
+                  <n-input v-model:value="aiApiBaseUrl" placeholder="https://api.openai.com/v1" />
+                </n-form-item>
+                <n-form-item label="Model">
+                  <n-input v-model:value="aiApiModel" placeholder="例如：gpt-4o-mini / deepseek-chat" />
+                </n-form-item>
+                <n-form-item label="API Key">
+                  <n-input v-model:value="aiApiKey" type="password" show-password-on="click" placeholder="已保存（不回显）；留空表示不修改" />
+                </n-form-item>
+                <n-form-item>
+                  <div style="display: flex; gap: 10px; flex-wrap: wrap">
+                    <n-button type="primary" @click="saveAiApiSettings">{{ t("settings.saveApiSettings") }}</n-button>
+                    <n-button tertiary type="warning" @click="clearAiApiKey">{{ t("settings.clearKey") }}</n-button>
+                  </div>
+                </n-form-item>
+              </n-form>
+
+              <n-divider style="margin: 0" />
+
+              <n-space vertical size="small">
+                <n-form label-placement="top" size="medium">
+                  <n-form-item :label="t('settings.summaryPromptTemplate')">
+                    <n-input
+                      v-model:value="globalSummaryPromptTemplate"
+                      type="textarea"
+                      :autosize="{ minRows: 8, maxRows: 14 }"
+                      :placeholder="t('settings.summaryPromptHint', { language: '{language}', text: '{text}' })"
+                    />
+                  </n-form-item>
+                </n-form>
+                <n-alert type="info" :show-icon="false">
+                  {{ t("settings.summaryPromptHint", { language: "{language}", text: "{text}" }) }}
+                </n-alert>
+                <div style="display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end">
+                  <n-button tertiary @click="resetGlobalSummaryPromptTemplate">{{ t("settings.resetToDefault") }}</n-button>
+                  <n-button type="primary" @click="saveGlobalSummaryPromptTemplate">{{ t("settings.savePromptTemplate") }}</n-button>
+                </div>
+              </n-space>
+            </n-space>
+          </n-tab-pane>
+
+          <n-tab-pane name="advanced" :tab="t('settings.tabs.advanced')">
             <n-alert type="warning" :bordered="false">
-              重置导航栏会清空：置顶、最近、排序。不会删除站点。
+              {{ t("settings.resetNavContent") }}
             </n-alert>
             <div style="margin-top: 12px">
-              <n-button tertiary type="error" @click="resetNavigation">重置导航栏</n-button>
+              <n-button tertiary type="error" @click="resetNavigation">{{ t("settings.resetNavButton") }}</n-button>
             </div>
           </n-tab-pane>
         </n-tabs>
 
         <template #footer>
           <div style="display: flex; justify-content: flex-end; gap: 10px">
-            <n-button @click="showSettings = false">取消</n-button>
-            <n-button type="primary" @click="showSettings = false">完成</n-button>
+            <n-button @click="showSettings = false">{{ t("settings.cancel") }}</n-button>
+            <n-button type="primary" @click="showSettings = false">{{ t("settings.done") }}</n-button>
           </div>
         </template>
       </n-card>

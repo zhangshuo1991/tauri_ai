@@ -5,6 +5,7 @@ import { createDiscreteApi, NButton, NIcon, NSelect, NSlider, NSwitch } from "na
 import { AddOutline, CloseOutline, DocumentTextOutline, GridOutline } from "@vicons/ionicons5";
 
 import type { AiSite } from "../types";
+import { t } from "../i18n";
 
 type TabsStateResponse = {
   active_tab_id: string;
@@ -18,10 +19,11 @@ type TabsStateResponse = {
 const props = defineProps<{
   sites: AiSite[];
   currentSiteId: string;
+  summarizing?: boolean;
 }>();
 
 const emit = defineEmits<{
-  (e: "open-context"): void;
+  (e: "summarize"): void;
 }>();
 
 const tabsState = ref<TabsStateResponse | null>(null);
@@ -43,7 +45,7 @@ function tabTitle(tab: { tab_id: string; site_id: string }): string {
   const count = tabsBySite.value.get(tab.site_id) ?? 0;
   if (count <= 1) return base;
   if (tab.tab_id === tab.site_id) return `${base} (1)`;
-  return `${base} (多会话)`;
+  return `${base} (${t("top.multiSession")})`;
 }
 
 const tabOptions = computed(() =>
@@ -85,6 +87,7 @@ async function createTabForCurrentSite() {
   try {
     const tabId = await invoke<string>("create_tab", { siteId: props.currentSiteId });
     await invoke("switch_tab", { tabId });
+    await invoke("set_active_tab_id", { tabId });
     await refresh();
   } finally {
     busy.value = false;
@@ -130,7 +133,7 @@ async function setSplit(enabled: boolean) {
     if (!state) return;
 
     if (!canEnableSplit.value) {
-      message.warning("请先创建第二个标签页（新建标签），再开启分屏。");
+      message.warning(t("top.splitNeedTwoTabs"));
       await refresh();
       return;
     }
@@ -140,12 +143,13 @@ async function setSplit(enabled: boolean) {
     let leftTabId = state.left_tab_id || active;
     const rightTabId = state.right_tab_id || existing.find((id) => id !== leftTabId) || "";
     if (!rightTabId) {
-      message.warning("请先创建另一个标签页，再开启分屏。");
+      message.warning(t("top.splitNeedTwoTabs"));
       await refresh();
       return;
     }
 
     await invoke("set_layout", { mode: "split", ratio: state.ratio || 0.5, leftTabId, rightTabId });
+    await invoke("set_active_tab_id", { tabId: leftTabId });
     await refresh();
   } finally {
     busy.value = false;
@@ -167,6 +171,18 @@ async function updateSplitTabs(leftTabId: string | null, rightTabId: string | nu
   await refresh();
 }
 
+async function updateLeftTab(leftTabId: string | null) {
+  if (!tabsState.value || !leftTabId) return;
+  await updateSplitTabs(leftTabId, tabsState.value.right_tab_id ?? null);
+  await invoke("set_active_tab_id", { tabId: leftTabId });
+}
+
+async function updateRightTab(rightTabId: string | null) {
+  if (!tabsState.value || !rightTabId) return;
+  await updateSplitTabs(tabsState.value.left_tab_id ?? null, rightTabId);
+  await invoke("set_active_tab_id", { tabId: rightTabId });
+}
+
 onMounted(() => {
   void refresh();
 });
@@ -181,23 +197,28 @@ onMounted(() => {
             <add-outline />
           </n-icon>
         </template>
-        新建标签
+        {{ t("top.newTab") }}
       </n-button>
 
-      <n-button size="small" :disabled="busy" @click="emit('open-context')">
+      <n-button
+        size="small"
+        :disabled="busy || summarizing"
+        :loading="summarizing"
+        @click="emit('summarize')"
+      >
         <template #icon>
           <n-icon>
             <document-text-outline />
           </n-icon>
         </template>
-        上下文
+        {{ summarizing ? t("top.summarizing") : t("top.summarize") }}
       </n-button>
 
       <div class="split">
         <n-switch size="small" :disabled="busy || !canEnableSplit" :value="splitEnabled" @update:value="setSplit" />
         <div class="split-label">
           <n-icon size="16"><grid-outline /></n-icon>
-          分屏
+          {{ t("top.split") }}
         </div>
       </div>
     </div>
@@ -210,7 +231,7 @@ onMounted(() => {
         <button
           class="tab-close"
           :disabled="busy"
-          title="关闭标签"
+          :title="t('top.closeTab')"
           @click.stop="closeTab(tab.tab_id)"
         >
           <n-icon size="14"><close-outline /></n-icon>
@@ -228,7 +249,7 @@ onMounted(() => {
         :value="tabsState.left_tab_id"
         :options="tabOptions"
         @update:show="onSelectShow"
-        @update:value="(v) => updateSplitTabs(v as string, tabsState?.right_tab_id ?? null)"
+        @update:value="(v) => updateLeftTab(v as string)"
       />
       <n-select
         size="small"
@@ -237,7 +258,7 @@ onMounted(() => {
         :value="tabsState.right_tab_id"
         :options="tabOptions"
         @update:show="onSelectShow"
-        @update:value="(v) => updateSplitTabs(tabsState?.left_tab_id ?? null, v as string)"
+        @update:value="(v) => updateRightTab(v as string)"
       />
       <n-slider
         style="width: 140px"

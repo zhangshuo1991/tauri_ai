@@ -5,6 +5,8 @@ import { AddOutline, BrushOutline, ChevronBackOutline, ChevronForwardOutline, Co
 
 import type { AiSite } from "../types";
 import { getIconUrl, getXiconComponentOrNull } from "../composables/useIcons";
+import appLogo from "../assets/logo.png";
+import { t } from "../i18n";
 
 const props = defineProps<{
   pinnedSites: AiSite[];
@@ -55,28 +57,28 @@ const contextMenuOptions = computed(() => {
   const isBuiltin = contextMenu.value.isBuiltin;
   const options: any[] = [
     {
-      label: "站点设置…",
+      label: t("sidebar.menu.siteSettings"),
       key: "site_settings",
       icon: () => h(NIcon, { size: 18 }, { default: () => h(BrushOutline) }),
     },
     {
-      label: isPinned ? "取消置顶" : "置顶",
+      label: isPinned ? t("sidebar.menu.unpin") : t("sidebar.menu.pin"),
       key: isPinned ? "unpin" : "pin",
       icon: () => h(NIcon, { size: 18 }, { default: () => h(isPinned ? Star : StarOutline) }),
     },
     {
-      label: "刷新页面",
+      label: t("sidebar.menu.refresh"),
       key: "refresh",
       icon: () => h(NIcon, { size: 18 }, { default: () => h(RefreshOutline) }),
     },
     {
-      label: "清除缓存",
+      label: t("sidebar.menu.clearCache"),
       key: "clear_cache",
       icon: () => h(NIcon, { size: 18 }, { default: () => h(TrashOutline) }),
     },
     { type: "divider", key: "d1" },
     {
-      label: "开发者工具",
+      label: t("sidebar.menu.devtools"),
       key: "devtools",
       icon: () => h(NIcon, { size: 18 }, { default: () => h(ConstructOutline) }),
     },
@@ -85,7 +87,7 @@ const contextMenuOptions = computed(() => {
   if (!isBuiltin) {
     options.push({ type: "divider", key: "d2" });
     options.push({
-      label: "删除站点",
+      label: t("sidebar.menu.removeSite"),
       key: "remove",
       icon: () => h(NIcon, { size: 18 }, { default: () => h(TrashOutline) }),
     });
@@ -209,17 +211,17 @@ function onDrop(event: DragEvent, targetId: string) {
   >
     <div class="sidebar-header">
       <div class="logo" title="AI Hub">
-        <span class="logo-icon">🤖</span>
+        <img class="logo-img" :src="appLogo" alt="AI Hub" draggable="false" />
       </div>
     </div>
 
     <nav class="nav-list">
       <div v-if="sidebarWidth > 100" class="nav-search">
-        <n-input v-model:value="search" size="small" placeholder="搜索站点（名称/URL）" clearable />
+        <n-input v-model:value="search" size="small" :placeholder="t('sidebar.searchPlaceholder')" clearable />
       </div>
 
       <template v-if="pinnedSites.length">
-        <div v-if="sidebarWidth > 100" class="nav-section-title">置顶</div>
+        <div v-if="sidebarWidth > 100" class="nav-section-title">{{ t("sidebar.sectionPinned") }}</div>
         <button
           v-for="site in pinnedSites"
           :key="`pinned_${site.id}`"
@@ -250,7 +252,7 @@ function onDrop(event: DragEvent, targetId: string) {
       </template>
 
       <template v-if="showRecent && sidebarWidth > 100">
-        <div class="nav-section-title">最近</div>
+        <div class="nav-section-title">{{ t("sidebar.sectionRecent") }}</div>
         <button
           v-for="site in recentSites.slice(0, 5)"
           :key="`recent_${site.id}`"
@@ -303,36 +305,40 @@ function onDrop(event: DragEvent, targetId: string) {
         <span v-if="currentView === site.id" class="active-indicator"></span>
       </button>
 
-      <button class="nav-item add-btn" title="添加站点" @click="emit('open-add-site')">
+      <button class="nav-item add-btn" :title="t('sidebar.addSite')" @click="emit('open-add-site')">
         <span class="icon">
           <n-icon class="add-icon" :size="20">
             <add-outline />
           </n-icon>
         </span>
-        <span v-if="sidebarWidth > 100" class="nav-label">添加站点</span>
+        <span v-if="sidebarWidth > 100" class="nav-label">{{ t("sidebar.addSite") }}</span>
       </button>
     </nav>
 
     <div class="sidebar-footer">
-      <button class="footer-btn settings-btn" @click="emit('open-settings')" title="设置">
+      <button class="footer-btn settings-btn" @click="emit('open-settings')" :title="t('sidebar.settings')">
         <n-icon class="footer-icon" :size="18">
           <settings-outline />
         </n-icon>
-        <span v-if="sidebarWidth > 100" class="footer-label">设置</span>
+        <span v-if="sidebarWidth > 100" class="footer-label">{{ t("sidebar.settings") }}</span>
       </button>
-      <button class="footer-btn theme-btn" @click="emit('toggle-theme')" :title="theme === 'dark' ? '切换到浅色主题' : '切换到深色主题'">
+      <button
+        class="footer-btn theme-btn"
+        @click="emit('toggle-theme')"
+        :title="theme === 'dark' ? t('sidebar.switchToLight') : t('sidebar.switchToDark')"
+      >
         <n-icon class="footer-icon" :size="18">
           <sunny-outline v-if="theme === 'dark'" />
           <moon-outline v-else />
         </n-icon>
-        <span v-if="sidebarWidth > 100" class="footer-label">{{ theme === "dark" ? "浅色" : "深色" }}</span>
+        <span v-if="sidebarWidth > 100" class="footer-label">{{ theme === "dark" ? t("sidebar.light") : t("sidebar.dark") }}</span>
       </button>
-      <button class="footer-btn toggle-btn" @click="emit('toggle-sidebar')" :title="isCollapsed ? '展开侧边栏' : '收缩侧边栏'">
+      <button class="footer-btn toggle-btn" @click="emit('toggle-sidebar')" :title="isCollapsed ? t('sidebar.expand') : t('sidebar.collapse')">
         <n-icon class="footer-icon" :size="18">
           <chevron-forward-outline v-if="isCollapsed" />
           <chevron-back-outline v-else />
         </n-icon>
-        <span v-if="sidebarWidth > 100" class="footer-label">{{ isCollapsed ? "展开" : "收缩" }}</span>
+        <span v-if="sidebarWidth > 100" class="footer-label">{{ isCollapsed ? t("sidebar.expand") : t("sidebar.collapse") }}</span>
       </button>
     </div>
 
@@ -371,15 +377,22 @@ function onDrop(event: DragEvent, targetId: string) {
 .logo {
   width: 40px;
   height: 40px;
-  background: linear-gradient(135deg, var(--accent-color), #cba6f7);
   border-radius: 12px;
   display: flex;
   align-items: center;
   justify-content: center;
+  overflow: hidden;
+  background: transparent;
+  flex: 0 0 40px;
 }
 
-.logo-icon {
-  font-size: 20px;
+.logo-img {
+  width: 40px;
+  height: 40px;
+  display: block;
+  object-fit: cover;
+  object-position: center;
+  image-rendering: -webkit-optimize-contrast;
 }
 
 .nav-list {
@@ -555,4 +568,3 @@ function onDrop(event: DragEvent, targetId: string) {
   white-space: nowrap;
 }
 </style>
-

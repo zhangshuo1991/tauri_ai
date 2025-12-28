@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::path::PathBuf;
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -12,6 +12,7 @@ use tauri::{
     Manager, Emitter, WebviewUrl, LogicalPosition, LogicalSize,
 };
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
+use tokio::sync::oneshot;
 
 // ============================================================================
 // 常量配置
@@ -84,6 +85,8 @@ pub struct AiSite {
     pub icon: String,
     #[serde(default)]
     pub builtin: bool,
+    #[serde(default)]
+    pub summary_prompt_override: String,
 }
 
 /// 应用配置
@@ -99,6 +102,10 @@ pub struct AppConfig {
     pub sidebar_width: f64,
     #[serde(default = "default_sidebar_expanded_width")]
     pub sidebar_expanded_width: f64,
+    #[serde(default = "default_language")]
+    pub language: String,
+    #[serde(default = "default_summary_prompt_template")]
+    pub summary_prompt_template: String,
     #[serde(default)]
     pub ai_api_base_url: String,
     #[serde(default)]
@@ -113,6 +120,17 @@ fn default_sidebar_expanded_width() -> f64 {
     180.0
 }
 
+fn default_language() -> String {
+    "zh-CN".to_string()
+}
+
+fn default_summary_prompt_template() -> String {
+    // Variables:
+    // - {language}: desired output language label
+    // - {text}: extracted page text
+    "请把以下内容总结成可迁移的上下文（输出语言：{language}）：\n\n要求：\n1) 1段简短摘要（<=120字）\n2) 5-10条要点列表\n3) 关键约束/偏好（如有）\n\n输出为纯文本，结构：\n摘要: ...\n要点: - ...\n约束: - ...\n\n内容：\n{text}".to_string()
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         let default_sites = get_builtin_sites();
@@ -125,6 +143,8 @@ impl Default for AppConfig {
             theme: "dark".to_string(),
             sidebar_width: 64.0,
             sidebar_expanded_width: default_sidebar_expanded_width(),
+            language: default_language(),
+            summary_prompt_template: default_summary_prompt_template(),
             ai_api_base_url: "https://api.openai.com/v1".to_string(),
             ai_api_model: "".to_string(),
             ai_api_key: "".to_string(),
@@ -142,6 +162,7 @@ fn get_builtin_sites() -> Vec<AiSite> {
             url: "https://chat.deepseek.com".to_string(),
             icon: "deepseek".to_string(),
             builtin: true,
+            summary_prompt_override: String::new(),
         },
         AiSite {
             id: "doubao".to_string(),
@@ -149,6 +170,7 @@ fn get_builtin_sites() -> Vec<AiSite> {
             url: "https://www.doubao.com/chat/".to_string(),
             icon: "doubao".to_string(),
             builtin: true,
+            summary_prompt_override: String::new(),
         },
         AiSite {
             id: "openai".to_string(),
@@ -156,6 +178,7 @@ fn get_builtin_sites() -> Vec<AiSite> {
             url: "https://chatgpt.com".to_string(),
             icon: "openai".to_string(),
             builtin: true,
+            summary_prompt_override: String::new(),
         },
         AiSite {
             id: "qianwen".to_string(),
@@ -163,6 +186,7 @@ fn get_builtin_sites() -> Vec<AiSite> {
             url: "https://tongyi.aliyun.com/qianwen/".to_string(),
             icon: "qianwen".to_string(),
             builtin: true,
+            summary_prompt_override: String::new(),
         },
     ]
 }
@@ -394,6 +418,47 @@ const TOP_BAR_HEIGHT: f64 = 48.0;
 
 /// 避免在创建 Webview 时处理 Resized 事件导致的潜在死锁
 static WEBVIEW_CREATE_IN_PROGRESS: AtomicUsize = AtomicUsize::new(0);
+static SUMMARY_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
+
+#[derive(Debug)]
+struct PendingExtract {
+    token: String,
+    tx: oneshot::Sender<String>,
+}
+
+static PENDING_EXTRACTS: Lazy<Mutex<HashMap<String, PendingExtract>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+fn is_main_invoker_webview(webview: &tauri::Webview) -> bool {
+    webview.label() == "main"
+}
+
+fn language_label(code: &str) -> &'static str {
+    match code {
+        "zh-CN" | "zh" => "中文",
+        "en" | "en-US" | "en-GB" => "English",
+        "ja" | "ja-JP" => "日本語",
+        "ko" | "ko-KR" => "한국어",
+        "es" | "es-ES" | "es-AR" => "Español",
+        "fr" | "fr-FR" => "Français",
+        _ => "English",
+    }
+}
+
+fn build_summary_prompt(template: &str, language: &str, text: &str) -> String {
+    let mut rendered = template
+        .replace("{language}", language)
+        .replace("{text}", text);
+    if !template.contains("{language}") {
+        rendered.push_str("\n\nLanguage: ");
+        rendered.push_str(language);
+    }
+    if !template.contains("{text}") {
+        rendered.push_str("\n\n");
+        rendered.push_str(text);
+    }
+    rendered
+}
 
 // ============================================================================
 // 工具函数
@@ -621,12 +686,27 @@ fn first_site_id_excluding(exclude_site_id: &str) -> Option<String> {
 
 /// 获取应用配置
 #[tauri::command]
-fn get_config() -> AppConfig {
-    APP_CONFIG.lock().unwrap().clone()
+fn get_config(webview: tauri::Webview) -> Result<AppConfig, String> {
+    if !is_main_invoker_webview(&webview) {
+        return Err("Not allowed".to_string());
+    }
+    // 注意：不要把 API Key 暴露给前端/远程页面
+    let mut cfg = APP_CONFIG.lock().unwrap().clone();
+    cfg.ai_api_key.clear();
+    Ok(cfg)
 }
 
 #[tauri::command]
-fn set_ai_api_settings(base_url: String, model: String, api_key: String) -> Result<(), String> {
+fn set_ai_api_settings(
+    webview: tauri::Webview,
+    base_url: String,
+    model: String,
+    api_key: String,
+    clear_key: Option<bool>,
+) -> Result<(), String> {
+    if !is_main_invoker_webview(&webview) {
+        return Err("Not allowed".to_string());
+    }
     let base_url_trimmed = base_url.trim().trim_end_matches('/').to_string();
     let base_url = if base_url_trimmed.is_empty() {
         "https://api.openai.com/v1".to_string()
@@ -638,13 +718,19 @@ fn set_ai_api_settings(base_url: String, model: String, api_key: String) -> Resu
     let mut config = APP_CONFIG.lock().unwrap();
     config.ai_api_base_url = base_url;
     config.ai_api_model = model;
-    config.ai_api_key = api_key.trim().to_string();
+    let api_key_trimmed = api_key.trim().to_string();
+    if !api_key_trimmed.is_empty() || clear_key == Some(true) {
+        config.ai_api_key = api_key_trimmed;
+    }
     save_config(&config)?;
     Ok(())
 }
 
 #[tauri::command]
-fn set_active_project(project_id: String) -> Result<(), String> {
+fn set_active_project(webview: tauri::Webview, project_id: String) -> Result<(), String> {
+    if !is_main_invoker_webview(&webview) {
+        return Err("Not allowed".to_string());
+    }
     let mut config = APP_CONFIG.lock().unwrap();
     config.active_project_id = project_id;
     save_config(&config)?;
@@ -652,21 +738,58 @@ fn set_active_project(project_id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn list_projects() -> Vec<ProjectSummary> {
+fn set_language(webview: tauri::Webview, language: String) -> Result<(), String> {
+    if !is_main_invoker_webview(&webview) {
+        return Err("Not allowed".to_string());
+    }
+    let lang = language.trim().to_string();
+    if lang.is_empty() {
+        return Err("language 不能为空".to_string());
+    }
+    let mut config = APP_CONFIG.lock().unwrap();
+    config.language = lang;
+    save_config(&config)?;
+    Ok(())
+}
+
+#[tauri::command]
+fn set_summary_prompt_template(webview: tauri::Webview, template: String) -> Result<(), String> {
+    if !is_main_invoker_webview(&webview) {
+        return Err("Not allowed".to_string());
+    }
+    let trimmed = template.trim().to_string();
+    let mut config = APP_CONFIG.lock().unwrap();
+    config.summary_prompt_template = if trimmed.is_empty() {
+        default_summary_prompt_template()
+    } else {
+        trimmed
+    };
+    save_config(&config)?;
+    Ok(())
+}
+
+#[tauri::command]
+fn list_projects(webview: tauri::Webview) -> Result<Vec<ProjectSummary>, String> {
+    if !is_main_invoker_webview(&webview) {
+        return Err("Not allowed".to_string());
+    }
     let mut projects = load_contexts();
     projects.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-    projects
+    Ok(projects
         .into_iter()
         .map(|p| ProjectSummary {
             id: p.id,
             title: p.title,
             updated_at: p.updated_at,
         })
-        .collect()
+        .collect())
 }
 
 #[tauri::command]
-fn get_project(project_id: String) -> Result<ProjectContext, String> {
+fn get_project(webview: tauri::Webview, project_id: String) -> Result<ProjectContext, String> {
+    if !is_main_invoker_webview(&webview) {
+        return Err("Not allowed".to_string());
+    }
     let projects = load_contexts();
     projects
         .into_iter()
@@ -675,7 +798,10 @@ fn get_project(project_id: String) -> Result<ProjectContext, String> {
 }
 
 #[tauri::command]
-fn create_project(title: String) -> Result<String, String> {
+fn create_project(webview: tauri::Webview, title: String) -> Result<String, String> {
+    if !is_main_invoker_webview(&webview) {
+        return Err("Not allowed".to_string());
+    }
     let mut projects = load_contexts();
     let id = format!("proj_{}", Uuid::new_v4().to_string().split('-').next().unwrap());
     let ts = now_ts();
@@ -701,7 +827,16 @@ fn create_project(title: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-fn update_project(project_id: String, title: String, notes: String, summary: String) -> Result<(), String> {
+fn update_project(
+    webview: tauri::Webview,
+    project_id: String,
+    title: String,
+    notes: String,
+    summary: String,
+) -> Result<(), String> {
+    if !is_main_invoker_webview(&webview) {
+        return Err("Not allowed".to_string());
+    }
     let mut projects = load_contexts();
     let mut found = false;
     for p in projects.iter_mut() {
@@ -723,7 +858,10 @@ fn update_project(project_id: String, title: String, notes: String, summary: Str
 }
 
 #[tauri::command]
-fn delete_project(project_id: String) -> Result<(), String> {
+fn delete_project(webview: tauri::Webview, project_id: String) -> Result<(), String> {
+    if !is_main_invoker_webview(&webview) {
+        return Err("Not allowed".to_string());
+    }
     let mut projects = load_contexts();
     let before = projects.len();
     projects.retain(|p| p.id != project_id);
@@ -756,7 +894,10 @@ struct OpenAiMessage {
 }
 
 #[tauri::command]
-async fn summarize_text(text: String) -> Result<String, String> {
+async fn summarize_text(webview: tauri::Webview, text: String, site_id: Option<String>) -> Result<String, String> {
+    if !is_main_invoker_webview(&webview) {
+        return Err("Not allowed".to_string());
+    }
     let config = APP_CONFIG.lock().unwrap().clone();
     if config.ai_api_key.trim().is_empty() {
         return Err("未配置 API Key".to_string());
@@ -768,10 +909,18 @@ async fn summarize_text(text: String) -> Result<String, String> {
     let base_url = config.ai_api_base_url.trim().trim_end_matches('/').to_string();
     let url = format!("{}/chat/completions", base_url);
 
-    let prompt = format!(
-        "请把以下内容总结成可迁移的上下文：\\n\\n要求：\\n1) 1段简短摘要（<=120字）\\n2) 5-10条要点列表\\n3) 关键约束/偏好（如有）\\n\\n输出为纯文本，结构：\\n摘要: ...\\n要点: - ...\\n约束: - ...\\n\\n内容：\\n{}",
-        text
-    );
+    let mut template = config.summary_prompt_template.clone();
+    if let Some(id) = site_id.as_deref() {
+        if let Some(site) = config.sites.iter().find(|s| s.id == id) {
+            if !site.summary_prompt_override.trim().is_empty() {
+                template = site.summary_prompt_override.clone();
+            }
+        }
+    }
+    if template.trim().is_empty() {
+        template = default_summary_prompt_template();
+    }
+    let prompt = build_summary_prompt(&template, language_label(&config.language), &text);
 
     let body = serde_json::json!({
         "model": config.ai_api_model,
@@ -816,9 +965,190 @@ async fn summarize_text(text: String) -> Result<String, String> {
     Ok(content)
 }
 
+fn ensure_active_project_id() -> Result<String, String> {
+    let mut config = APP_CONFIG.lock().unwrap();
+    if !config.active_project_id.trim().is_empty() {
+        return Ok(config.active_project_id.clone());
+    }
+
+    let mut projects = load_contexts();
+    if let Some(first) = projects.first() {
+        config.active_project_id = first.id.clone();
+        let _ = save_config(&config);
+        return Ok(first.id.clone());
+    }
+
+    let id = format!("proj_{}", Uuid::new_v4().to_string().split('-').next().unwrap());
+    let ts = now_ts();
+    projects.push(ProjectContext {
+        id: id.clone(),
+        title: "默认项目".to_string(),
+        notes: String::new(),
+        summary: String::new(),
+        created_at: ts,
+        updated_at: ts,
+    });
+    save_contexts(&projects)?;
+
+    config.active_project_id = id.clone();
+    let _ = save_config(&config);
+    Ok(id)
+}
+
+#[tauri::command]
+async fn aihub_submit_page_text(request_id: String, token: String, text: String) -> Result<(), String> {
+    let pending = PENDING_EXTRACTS.lock().unwrap().remove(&request_id);
+    if let Some(p) = pending {
+        if p.token != token {
+            return Ok(());
+        }
+        let _ = p.tx.send(text);
+    }
+    Ok(())
+}
+
+/// 标记“当前活跃 Tab”（用于 split 模式下的“总结当前对话”）
+#[tauri::command]
+fn set_active_tab_id(webview: tauri::Webview, tab_id: String) -> Result<(), String> {
+    if !is_main_invoker_webview(&webview) {
+        return Err("Not allowed".to_string());
+    }
+    if tab_id.trim().is_empty() {
+        return Ok(());
+    }
+    *ACTIVE_TAB_ID.lock().unwrap() = tab_id;
+    Ok(())
+}
+
+#[tauri::command]
+async fn summarize_active_tab(app: tauri::AppHandle, webview: tauri::Webview) -> Result<String, String> {
+    if !is_main_invoker_webview(&webview) {
+        return Err("Not allowed".to_string());
+    }
+
+    if SUMMARY_IN_PROGRESS
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return Err("总结正在进行中，请稍候…".to_string());
+    }
+
+    struct SummaryInProgressGuard;
+    impl Drop for SummaryInProgressGuard {
+        fn drop(&mut self) {
+            SUMMARY_IN_PROGRESS.store(false, Ordering::SeqCst);
+        }
+    }
+    let _guard = SummaryInProgressGuard;
+
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        async {
+    let tab_id = {
+        let active = ACTIVE_TAB_ID.lock().unwrap().clone();
+        if !active.is_empty() {
+            active
+        } else {
+            CURRENT_VIEW.lock().unwrap().clone()
+        }
+    };
+
+    if tab_id.trim().is_empty() {
+        return Err("没有可总结的页面".to_string());
+    }
+
+    let site_id = get_tab_site_id(&tab_id).unwrap_or_else(|_| tab_id.clone());
+    ensure_tab_webview(&app, &tab_id, &site_id)?;
+
+    let webview_label = format!("ai_{}", tab_id);
+    let child = app
+        .get_webview(&webview_label)
+        .ok_or_else(|| "Webview 不存在".to_string())?;
+
+    let request_id = Uuid::new_v4().to_string();
+    let token = Uuid::new_v4().to_string();
+    let (tx, rx) = oneshot::channel::<String>();
+    PENDING_EXTRACTS
+        .lock()
+        .unwrap()
+        .insert(request_id.clone(), PendingExtract { token: token.clone(), tx });
+
+    let js = format!(
+        r#"(async () => {{
+  try {{
+    const text = document?.body?.innerText || '';
+    await window.__TAURI__.core.invoke('aihub_submit_page_text', {{ requestId: '{rid}', token: '{tok}', text }});
+  }} catch (e) {{
+    try {{
+      await window.__TAURI__.core.invoke('aihub_submit_page_text', {{ requestId: '{rid}', token: '{tok}', text: '' }});
+    }} catch (_) {{}}
+  }}
+}})();"#,
+        rid = request_id,
+        tok = token
+    );
+
+    child.eval(&js).map_err(|e| format!("执行提取脚本失败: {}", e))?;
+
+    let extracted = match tokio::time::timeout(std::time::Duration::from_secs(20), rx).await {
+        Ok(res) => res.map_err(|_| "提取失败".to_string())?,
+        Err(_) => {
+            PENDING_EXTRACTS.lock().unwrap().remove(&request_id);
+            return Err("提取超时".to_string());
+        }
+    };
+
+    if extracted.trim().is_empty() {
+        return Err("未能提取到页面文本（可能被站点限制或页面未加载完成）".to_string());
+    }
+
+    // 总结（内部调用，避免再次经过 invoke 参数校验）
+    let summary = summarize_text(webview, extracted.clone(), Some(site_id.clone())).await?;
+
+    // 保存到 active project（覆盖 notes/summary）
+    let project_id = ensure_active_project_id()?;
+    let mut projects = load_contexts();
+    let ts = now_ts();
+    let mut found = false;
+    for p in projects.iter_mut() {
+        if p.id != project_id {
+            continue;
+        }
+        found = true;
+        p.notes = extracted;
+        p.summary = summary.clone();
+        p.updated_at = ts;
+        break;
+    }
+    if !found {
+        projects.push(ProjectContext {
+            id: project_id,
+            title: "默认项目".to_string(),
+            notes: String::new(),
+            summary: summary.clone(),
+            created_at: ts,
+            updated_at: ts,
+        });
+    }
+    let _ = save_contexts(&projects);
+
+    Ok(summary)
+        },
+    )
+    .await;
+
+    match result {
+        Ok(res) => res,
+        Err(_) => Err("总结超时（60s）".to_string()),
+    }
+}
+
 /// 获取所有 AI 站点列表（按排序顺序）
 #[tauri::command]
-fn get_ai_sites() -> Vec<AiSite> {
+fn get_ai_sites(webview: tauri::Webview) -> Result<Vec<AiSite>, String> {
+    if !is_main_invoker_webview(&webview) {
+        return Err("Not allowed".to_string());
+    }
     let config = APP_CONFIG.lock().unwrap();
     let mut sites: Vec<AiSite> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
@@ -840,13 +1170,16 @@ fn get_ai_sites() -> Vec<AiSite> {
         }
     }
 
-    sites
+    Ok(sites)
 }
 
 /// 获取当前活跃的视图 ID
 #[tauri::command]
-fn get_current_view() -> String {
-    CURRENT_VIEW.lock().unwrap().clone()
+fn get_current_view(webview: tauri::Webview) -> Result<String, String> {
+    if !is_main_invoker_webview(&webview) {
+        return Err("Not allowed".to_string());
+    }
+    Ok(CURRENT_VIEW.lock().unwrap().clone())
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -867,7 +1200,10 @@ struct TabsStateResponse {
 
 /// 获取当前 Tabs 状态（用于前端渲染 TabBar/分屏）
 #[tauri::command]
-fn get_tabs_state() -> TabsStateResponse {
+fn get_tabs_state(webview: tauri::Webview) -> Result<TabsStateResponse, String> {
+    if !is_main_invoker_webview(&webview) {
+        return Err("Not allowed".to_string());
+    }
     let layout = LAYOUT_STATE.lock().unwrap().clone();
     let active_tab_id = ACTIVE_TAB_ID.lock().unwrap().clone();
 
@@ -886,7 +1222,7 @@ fn get_tabs_state() -> TabsStateResponse {
     }
     tabs.sort_by(|a, b| a.tab_id.cmp(&b.tab_id));
 
-    TabsStateResponse {
+    Ok(TabsStateResponse {
         active_tab_id,
         mode: match layout.mode {
             LayoutMode::Single => "single".to_string(),
@@ -896,12 +1232,15 @@ fn get_tabs_state() -> TabsStateResponse {
         left_tab_id: layout.left_tab_id,
         right_tab_id: layout.right_tab_id,
         tabs,
-    }
+    })
 }
 
 /// 创建一个新 Tab（默认共享站点登录：同站点共用 data directory）
 #[tauri::command]
-fn create_tab(site_id: String) -> Result<String, String> {
+fn create_tab(webview: tauri::Webview, site_id: String) -> Result<String, String> {
+    if !is_main_invoker_webview(&webview) {
+        return Err("Not allowed".to_string());
+    }
     let _ = get_site_by_id(&site_id)?;
     println!("[create_tab] site_id={}", site_id);
     let tab_id = format!(
@@ -914,8 +1253,7 @@ fn create_tab(site_id: String) -> Result<String, String> {
 }
 
 /// 切换到指定 Tab（进入单视图模式）
-#[tauri::command]
-async fn switch_tab(app: tauri::AppHandle, tab_id: String) -> Result<(), String> {
+async fn switch_tab_inner(app: tauri::AppHandle, tab_id: String) -> Result<(), String> {
     let site_id = get_tab_site_id(&tab_id)?;
     println!("[switch_tab] tab_id={} site_id={}", tab_id, site_id);
 
@@ -928,22 +1266,34 @@ async fn switch_tab(app: tauri::AppHandle, tab_id: String) -> Result<(), String>
 
     *ACTIVE_TAB_ID.lock().unwrap() = tab_id.clone();
     ensure_tab_webview(&app, &tab_id, &site_id)?;
-    resize_webviews(app)?;
+    resize_webviews_inner(&app, true)?;
 
     *CURRENT_VIEW.lock().unwrap() = site_id.clone();
     upsert_recent_site(&site_id);
     Ok(())
 }
 
+#[tauri::command]
+async fn switch_tab(webview: tauri::Webview, app: tauri::AppHandle, tab_id: String) -> Result<(), String> {
+    if !is_main_invoker_webview(&webview) {
+        return Err("Not allowed".to_string());
+    }
+    switch_tab_inner(app, tab_id).await
+}
+
 /// 设置布局（single/split）
 #[tauri::command]
 async fn set_layout(
+    webview: tauri::Webview,
     app: tauri::AppHandle,
     mode: String,
     ratio: Option<f64>,
     left_tab_id: Option<String>,
     right_tab_id: Option<String>,
 ) -> Result<(), String> {
+    if !is_main_invoker_webview(&webview) {
+        return Err("Not allowed".to_string());
+    }
     if mode == "single" {
         println!("[set_layout] mode=single");
         {
@@ -952,7 +1302,7 @@ async fn set_layout(
             layout.left_tab_id = None;
             layout.right_tab_id = None;
         }
-        resize_webviews(app)?;
+        resize_webviews_inner(&app, true)?;
         return Ok(());
     }
 
@@ -987,7 +1337,7 @@ async fn set_layout(
         layout.right_tab_id = Some(right.clone());
     }
 
-    resize_webviews(app)?;
+    resize_webviews_inner(&app, true)?;
 
     // 兼容：CURRENT_VIEW 仍返回“当前主站点”，优先 active tab 的站点
     if let Ok(active_site) = get_tab_site_id(&ACTIVE_TAB_ID.lock().unwrap().clone()) {
@@ -1001,7 +1351,10 @@ async fn set_layout(
 
 /// 关闭一个 Tab
 #[tauri::command]
-async fn close_tab(app: tauri::AppHandle, tab_id: String) -> Result<(), String> {
+async fn close_tab(webview: tauri::Webview, app: tauri::AppHandle, tab_id: String) -> Result<(), String> {
+    if !is_main_invoker_webview(&webview) {
+        return Err("Not allowed".to_string());
+    }
     let closed_site_id = get_tab_site_id(&tab_id).unwrap_or_else(|_| tab_id.clone());
     let webview_label = format!("ai_{}", tab_id);
     if let Some(webview) = app.get_webview(&webview_label) {
@@ -1072,22 +1425,21 @@ async fn close_tab(app: tauri::AppHandle, tab_id: String) -> Result<(), String> 
         CloseFallback::SwitchToFirstSite(site_id) => {
             *ACTIVE_TAB_ID.lock().unwrap() = String::new();
             *CURRENT_VIEW.lock().unwrap() = String::new();
-            switch_view(app.clone(), site_id).await?;
+            switch_view_inner(app.clone(), site_id).await?;
             return Ok(());
         }
         CloseFallback::SwitchToTab(tab) => {
-            switch_tab(app.clone(), tab).await?;
+            switch_tab_inner(app.clone(), tab).await?;
             return Ok(());
         }
     }
 
-    resize_webviews(app)?;
+    resize_webviews_inner(&app, true)?;
     Ok(())
 }
 
 /// 切换视图（核心功能）
-#[tauri::command]
-async fn switch_view(app: tauri::AppHandle, site_id: String) -> Result<(), String> {
+async fn switch_view_inner(app: tauri::AppHandle, site_id: String) -> Result<(), String> {
     // 站点切换默认使用主 Tab（tab_id == site_id）并进入单视图模式
     let _ = get_site_by_id(&site_id)?;
 
@@ -1100,16 +1452,27 @@ async fn switch_view(app: tauri::AppHandle, site_id: String) -> Result<(), Strin
 
     *ACTIVE_TAB_ID.lock().unwrap() = site_id.clone();
     ensure_tab_webview(&app, &site_id, &site_id)?;
-    resize_webviews(app.clone())?;
+    resize_webviews_inner(&app, true)?;
 
     *CURRENT_VIEW.lock().unwrap() = site_id.clone();
     upsert_recent_site(&site_id);
     Ok(())
 }
 
+#[tauri::command]
+async fn switch_view(webview: tauri::Webview, app: tauri::AppHandle, site_id: String) -> Result<(), String> {
+    if !is_main_invoker_webview(&webview) {
+        return Err("Not allowed".to_string());
+    }
+    switch_view_inner(app, site_id).await
+}
+
 /// 刷新当前视图
 #[tauri::command]
-fn refresh_view(app: tauri::AppHandle, site_id: String) -> Result<(), String> {
+fn refresh_view(webview: tauri::Webview, app: tauri::AppHandle, site_id: String) -> Result<(), String> {
+    if !is_main_invoker_webview(&webview) {
+        return Err("Not allowed".to_string());
+    }
     let views: Vec<String> = CREATED_VIEWS.lock().unwrap().keys().cloned().collect();
     for tab_id in views {
         if get_tab_site_id(&tab_id).ok().as_deref() != Some(site_id.as_str()) {
@@ -1128,7 +1491,10 @@ fn refresh_view(app: tauri::AppHandle, site_id: String) -> Result<(), String> {
 
 /// 清除站点缓存
 #[tauri::command]
-fn clear_view_cache(app: tauri::AppHandle, site_id: String) -> Result<(), String> {
+fn clear_view_cache(webview: tauri::Webview, app: tauri::AppHandle, site_id: String) -> Result<(), String> {
+    if !is_main_invoker_webview(&webview) {
+        return Err("Not allowed".to_string());
+    }
     // 关闭该站点下所有 Tab Webview（含主 Tab）
     for tab_id in tab_ids_for_site(&site_id) {
         close_tab_webview(&app, &tab_id);
@@ -1152,7 +1518,10 @@ fn clear_view_cache(app: tauri::AppHandle, site_id: String) -> Result<(), String
 
 /// 打开开发者工具
 #[tauri::command]
-fn open_devtools(app: tauri::AppHandle, site_id: String) -> Result<(), String> {
+fn open_devtools(webview: tauri::Webview, app: tauri::AppHandle, site_id: String) -> Result<(), String> {
+    if !is_main_invoker_webview(&webview) {
+        return Err("Not allowed".to_string());
+    }
     let active_tab_id = ACTIVE_TAB_ID.lock().unwrap().clone();
     let preferred_tab = if !active_tab_id.is_empty()
         && get_tab_site_id(&active_tab_id).ok().as_deref() == Some(site_id.as_str())
@@ -1173,7 +1542,10 @@ fn open_devtools(app: tauri::AppHandle, site_id: String) -> Result<(), String> {
 
 /// 设置侧边栏宽度（拖拽调整时调用）
 #[tauri::command]
-fn set_sidebar_width(app: tauri::AppHandle, width: f64) -> Result<(), String> {
+fn set_sidebar_width(webview: tauri::Webview, app: tauri::AppHandle, width: f64) -> Result<(), String> {
+    if !is_main_invoker_webview(&webview) {
+        return Err("Not allowed".to_string());
+    }
     // 更新配置中的侧边栏宽度
     {
         let mut config = APP_CONFIG.lock().unwrap();
@@ -1191,7 +1563,10 @@ fn set_sidebar_width(app: tauri::AppHandle, width: f64) -> Result<(), String> {
 
 /// 更新所有 Webview 尺寸（窗口调整大小时调用）
 #[tauri::command]
-fn resize_webviews(app: tauri::AppHandle) -> Result<(), String> {
+fn resize_webviews(webview: tauri::Webview, app: tauri::AppHandle) -> Result<(), String> {
+    if !is_main_invoker_webview(&webview) {
+        return Err("Not allowed".to_string());
+    }
     resize_webviews_inner(&app, true)
 }
 
@@ -1273,13 +1648,17 @@ fn resize_webviews_inner(app: &tauri::AppHandle, apply_visibility: bool) -> Resu
 
 /// 添加自定义站点
 #[tauri::command]
-fn add_site(name: String, url: String, icon: String) -> Result<AiSite, String> {
+fn add_site(webview: tauri::Webview, name: String, url: String, icon: String) -> Result<AiSite, String> {
+    if !is_main_invoker_webview(&webview) {
+        return Err("Not allowed".to_string());
+    }
     let new_site = AiSite {
         id: format!("custom_{}", Uuid::new_v4().to_string().split('-').next().unwrap()),
         name,
         url,
         icon,
         builtin: false,
+        summary_prompt_override: String::new(),
     };
 
     let mut config = APP_CONFIG.lock().unwrap();
@@ -1293,12 +1672,17 @@ fn add_site(name: String, url: String, icon: String) -> Result<AiSite, String> {
 /// 更新站点（支持内置与自定义站点的基本信息编辑）
 #[tauri::command]
 fn update_site(
+    webview: tauri::Webview,
     app: tauri::AppHandle,
     site_id: String,
     name: String,
     url: String,
     icon: String,
+    summary_prompt_override: Option<String>,
 ) -> Result<(), String> {
+    if !is_main_invoker_webview(&webview) {
+        return Err("Not allowed".to_string());
+    }
     let (old_url, new_url, config_snapshot) = {
         let mut config = APP_CONFIG.lock().unwrap();
         let site = config
@@ -1311,6 +1695,9 @@ fn update_site(
         site.name = name;
         site.url = url;
         site.icon = icon;
+        if let Some(override_template) = summary_prompt_override {
+            site.summary_prompt_override = override_template;
+        }
         let new_url = site.url.clone();
 
         (old_url, new_url, config.clone())
@@ -1341,7 +1728,10 @@ fn update_site(
 
 /// 删除自定义站点
 #[tauri::command]
-fn remove_site(app: tauri::AppHandle, site_id: String) -> Result<(), String> {
+fn remove_site(webview: tauri::Webview, app: tauri::AppHandle, site_id: String) -> Result<(), String> {
+    if !is_main_invoker_webview(&webview) {
+        return Err("Not allowed".to_string());
+    }
     let mut config = APP_CONFIG.lock().unwrap();
 
     // 检查是否为内置站点
@@ -1379,7 +1769,10 @@ fn remove_site(app: tauri::AppHandle, site_id: String) -> Result<(), String> {
 
 /// 更新站点排序
 #[tauri::command]
-fn update_sites_order(order: Vec<String>) -> Result<(), String> {
+fn update_sites_order(webview: tauri::Webview, order: Vec<String>) -> Result<(), String> {
+    if !is_main_invoker_webview(&webview) {
+        return Err("Not allowed".to_string());
+    }
     let mut config = APP_CONFIG.lock().unwrap();
     let existing: HashSet<String> = config.sites.iter().map(|s| s.id.clone()).collect();
 
@@ -1407,7 +1800,10 @@ fn update_sites_order(order: Vec<String>) -> Result<(), String> {
 
 /// 置顶/取消置顶站点
 #[tauri::command]
-fn toggle_pin_site(site_id: String, pinned: bool) -> Result<(), String> {
+fn toggle_pin_site(webview: tauri::Webview, site_id: String, pinned: bool) -> Result<(), String> {
+    if !is_main_invoker_webview(&webview) {
+        return Err("Not allowed".to_string());
+    }
     let mut config = APP_CONFIG.lock().unwrap();
     if !config.sites.iter().any(|s| s.id == site_id) {
         return Err("站点不存在".to_string());
@@ -1424,7 +1820,10 @@ fn toggle_pin_site(site_id: String, pinned: bool) -> Result<(), String> {
 
 /// 更新置顶站点顺序（仅组内排序）
 #[tauri::command]
-fn update_pinned_sites_order(order: Vec<String>) -> Result<(), String> {
+fn update_pinned_sites_order(webview: tauri::Webview, order: Vec<String>) -> Result<(), String> {
+    if !is_main_invoker_webview(&webview) {
+        return Err("Not allowed".to_string());
+    }
     let mut config = APP_CONFIG.lock().unwrap();
     let existing: std::collections::HashSet<String> =
         config.sites.iter().map(|s| s.id.clone()).collect();
@@ -1449,7 +1848,10 @@ fn update_pinned_sites_order(order: Vec<String>) -> Result<(), String> {
 
 /// 清空最近使用列表
 #[tauri::command]
-fn clear_recent_sites() -> Result<(), String> {
+fn clear_recent_sites(webview: tauri::Webview) -> Result<(), String> {
+    if !is_main_invoker_webview(&webview) {
+        return Err("Not allowed".to_string());
+    }
     let mut config = APP_CONFIG.lock().unwrap();
     config.recent_site_ids.clear();
     save_config(&config)?;
@@ -1458,7 +1860,10 @@ fn clear_recent_sites() -> Result<(), String> {
 
 /// 重置导航栏数据（排序/置顶/最近），保留站点本身
 #[tauri::command]
-fn reset_navigation() -> Result<(), String> {
+fn reset_navigation(webview: tauri::Webview) -> Result<(), String> {
+    if !is_main_invoker_webview(&webview) {
+        return Err("Not allowed".to_string());
+    }
     let mut config = APP_CONFIG.lock().unwrap();
 
     // 同步清理 sites 重复项（避免侧边栏重复）
@@ -1497,7 +1902,10 @@ fn reset_navigation() -> Result<(), String> {
 
 /// 设置主题
 #[tauri::command]
-fn set_theme(theme: String) -> Result<(), String> {
+fn set_theme(webview: tauri::Webview, theme: String) -> Result<(), String> {
+    if !is_main_invoker_webview(&webview) {
+        return Err("Not allowed".to_string());
+    }
     let mut config = APP_CONFIG.lock().unwrap();
     config.theme = theme;
     save_config(&config)?;
@@ -1506,7 +1914,10 @@ fn set_theme(theme: String) -> Result<(), String> {
 
 /// 显示/隐藏当前活跃的子 Webview（用于在主 UI 上方显示弹窗）
 #[tauri::command]
-fn set_active_view_visible(app: tauri::AppHandle, visible: bool) -> Result<(), String> {
+fn set_active_view_visible(webview: tauri::Webview, app: tauri::AppHandle, visible: bool) -> Result<(), String> {
+    if !is_main_invoker_webview(&webview) {
+        return Err("Not allowed".to_string());
+    }
     let layout = LAYOUT_STATE.lock().unwrap().clone();
     let active_tab_id = ACTIVE_TAB_ID.lock().unwrap().clone();
     let current_site_id = CURRENT_VIEW.lock().unwrap().clone();
@@ -1593,6 +2004,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_config,
             set_ai_api_settings,
+            set_language,
+            set_summary_prompt_template,
             get_ai_sites,
             get_current_view,
             get_tabs_state,
@@ -1621,6 +2034,9 @@ pub fn run() {
             update_project,
             delete_project,
             summarize_text,
+            aihub_submit_page_text,
+            set_active_tab_id,
+            summarize_active_tab,
             set_theme,
             set_active_view_visible,
         ])

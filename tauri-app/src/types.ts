@@ -4,6 +4,7 @@ export interface AiSite {
   url: string;
   icon: string;
   builtin: boolean;
+  summary_prompt_override?: string;
 }
 
 export interface AppConfig {
@@ -14,6 +15,8 @@ export interface AppConfig {
   theme: string;
   sidebar_width: number;
   sidebar_expanded_width: number;
+  language: string;
+  summary_prompt_template: string;
   ai_api_base_url: string;
   ai_api_model: string;
   ai_api_key: string;

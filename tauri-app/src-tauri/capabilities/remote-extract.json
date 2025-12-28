@@ -1,0 +1,16 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "remote-extract",
+  "description": "Allow limited IPC from remote AI pages for text extraction only.",
+  "local": false,
+  "webviews": ["ai_*"],
+  "remote": {
+    "urls": [
+      "https://chat.deepseek.com/*",
+      "https://www.doubao.com/*",
+      "https://chatgpt.com/*",
+      "https://tongyi.aliyun.com/*"
+    ]
+  },
+  "permissions": ["core:default"]
+}
