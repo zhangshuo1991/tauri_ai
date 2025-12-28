@@ -516,7 +516,7 @@ export function t(key: string, params?: Record<string, string | number>): string
   let text = dict[key] ?? fallback[key] ?? key;
   if (params) {
     for (const [k, v] of Object.entries(params)) {
-      text = text.replaceAll(`{${k}}`, String(v));
+      text = text.replace(`{${k}}`, String(v));
     }
   }
   return text;

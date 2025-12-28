@@ -1523,18 +1523,36 @@ fn open_devtools(webview: tauri::Webview, app: tauri::AppHandle, site_id: String
         return Err("Not allowed".to_string());
     }
     let active_tab_id = ACTIVE_TAB_ID.lock().unwrap().clone();
-    let preferred_tab = if !active_tab_id.is_empty()
+    let tab_id = if !active_tab_id.is_empty()
         && get_tab_site_id(&active_tab_id).ok().as_deref() == Some(site_id.as_str())
     {
-        Some(active_tab_id)
+        active_tab_id
     } else {
-        None
+        site_id.clone()
     };
 
-    let tab_id = preferred_tab.unwrap_or_else(|| site_id.clone());
     let webview_label = format!("ai_{}", tab_id);
-    if let Some(webview) = app.get_webview(&webview_label) {
-        webview.open_devtools();
+    // Devtools APIs are only available in debug builds on some platforms/toolchains.
+    // Keep release builds compiling by gating the call.
+    #[cfg(debug_assertions)]
+    {
+        if let Some(wv) = app.get_webview(&webview_label) {
+            wv.open_devtools();
+            return Ok(());
+        }
+        if let Some(main_wv) = app.get_webview("main") {
+            main_wv.open_devtools();
+            return Ok(());
+        }
+        return Err("Webview 不存在".to_string());
+    }
+
+    #[cfg(not(debug_assertions))]
+    {
+        let _ = app;
+        let _ = webview_label;
+        let _ = site_id;
+        return Err("Devtools 仅在开发模式可用".to_string());
     }
 
     Ok(())
