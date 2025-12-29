@@ -23,6 +23,7 @@ import {
   NDivider,
   NForm,
   NFormItem,
+  NGlobalStyle,
   NInput,
   NInputNumber,
   NModal,
@@ -512,6 +513,7 @@ const recentShownSet = computed(() => new Set(recentSitesShown.value.map((s) => 
 const unpinnedSites = computed(() =>
   sites.value
     .filter((s) => !pinnedSet.value.has(s.id))
+    // 为避免“最近”区块与主列表重复，主列表里隐藏最近项（展开/收缩保持一致顺序）
     .filter((s) => !(showRecentSection.value && recentShownSet.value.has(s.id)))
     .filter(siteMatchesQuery),
 );
@@ -581,6 +583,7 @@ onUnmounted(() => {
 
 <template>
   <n-config-provider :theme="naiveTheme" :locale="naiveLocale" :date-locale="naiveDateLocale">
+    <n-global-style />
     <div class="app-container">
       <sidebar
         v-model:search="siteSearch"
