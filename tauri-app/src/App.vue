@@ -84,6 +84,7 @@ const topBarRef = ref<InstanceType<typeof TopBar> | null>(null);
 // 事件监听器
 let unlistenLoading: UnlistenFn | null = null;
 let unlistenLoaded: UnlistenFn | null = null;
+let unlistenLoadFailed: UnlistenFn | null = null;
 
 // AI API 设置（MVP：明文存 config.json）
 const aiApiBaseUrl = ref("");
@@ -572,12 +573,35 @@ onMounted(async () => {
   unlistenLoaded = await listen<string>("webview-loaded", () => {
     loading.value = false;
   });
+
+  unlistenLoadFailed = await listen<{
+    tab_id: string;
+    site_id: string;
+    url: string;
+    message: string;
+  }>("webview-load-failed", async (event) => {
+    loading.value = false;
+    const payload = event.payload;
+    if (payload?.message) {
+      showError(payload.message);
+    } else {
+      showError("页面加载失败");
+    }
+
+    try {
+      currentView.value = await invoke<string>("get_current_view");
+      await topBarRef.value?.refresh?.();
+    } catch (error) {
+      console.error("刷新视图状态失败:", error);
+    }
+  });
 });
 
 // 清理
 onUnmounted(() => {
   if (unlistenLoading) unlistenLoading();
   if (unlistenLoaded) unlistenLoaded();
+  if (unlistenLoadFailed) unlistenLoadFailed();
 });
 </script>
 

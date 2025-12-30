@@ -1,9 +1,10 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
+use std::io::Write;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::path::PathBuf;
 use std::fs;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH, Duration};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -71,6 +72,9 @@ window.chrome = {
     app: {}
 };
 "#;
+
+/// Webview 空闲超时时长（秒）
+const WEBVIEW_IDLE_TTL_SECS: u64 = 3 * 24 * 60 * 60;
 
 // ============================================================================
 // 数据结构
@@ -212,6 +216,26 @@ fn get_contexts_path() -> PathBuf {
     config_dir.join("contexts.json")
 }
 
+fn get_webview_error_log_path() -> PathBuf {
+    let proj_dirs = directories::ProjectDirs::from("com", "aihub", "AIHub")
+        .expect("Could not get project directories");
+    let config_dir = proj_dirs.config_dir();
+    let _ = fs::create_dir_all(config_dir);
+    config_dir.join("webview-errors.log")
+}
+
+fn append_webview_error_log(tab_id: &str, site_id: &str, url: &str, message: &str) {
+    let path = get_webview_error_log_path();
+    if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(path) {
+        let ts = now_ts();
+        let _ = writeln!(
+            file,
+            "[{}] tab_id={} site_id={} url={} error={}",
+            ts, tab_id, site_id, url, message
+        );
+    }
+}
+
 /// 加载配置
 fn load_config() -> AppConfig {
     let config_path = get_config_path();
@@ -343,6 +367,21 @@ static TAB_SITE_MAP: Lazy<Mutex<HashMap<String, String>>> = Lazy::new(|| Mutex::
 
 /// 当前活跃 Tab（用于单视图模式）
 static ACTIVE_TAB_ID: Lazy<Mutex<String>> = Lazy::new(|| Mutex::new(String::new()));
+
+#[derive(Debug, Clone)]
+struct RetryState {
+    url: String,
+    attempts: u8,
+}
+
+/// Tab 最后使用时间（Unix 秒）
+static LAST_USED_AT: Lazy<Mutex<HashMap<String, u64>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+
+/// Tab 最近请求的 URL（用于失败重试）
+static LAST_REQUESTED_URL: Lazy<Mutex<HashMap<String, String>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+
+/// Tab 重试状态（每个 URL 只重试一次）
+static RETRY_STATE: Lazy<Mutex<HashMap<String, RetryState>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
 #[derive(Debug, Clone)]
 enum LayoutMode {
@@ -553,6 +592,94 @@ fn upsert_recent_site(site_id: &str) {
     let _ = save_config(&config);
 }
 
+fn touch_tab(tab_id: &str) {
+    if tab_id.trim().is_empty() {
+        return;
+    }
+    LAST_USED_AT
+        .lock()
+        .unwrap()
+        .insert(tab_id.to_string(), now_ts());
+}
+
+fn mark_last_requested_url(tab_id: &str, url: &tauri::Url) {
+    if is_error_url(url) {
+        return;
+    }
+    LAST_REQUESTED_URL
+        .lock()
+        .unwrap()
+        .insert(tab_id.to_string(), url.as_str().to_string());
+}
+
+fn reset_retry_state(tab_id: &str) {
+    RETRY_STATE.lock().unwrap().remove(tab_id);
+}
+
+fn register_retry_attempt(tab_id: &str, url: &str) -> bool {
+    let mut state = RETRY_STATE.lock().unwrap();
+    let entry = state.entry(tab_id.to_string()).or_insert(RetryState {
+        url: url.to_string(),
+        attempts: 0,
+    });
+    if entry.url != url {
+        entry.url = url.to_string();
+        entry.attempts = 0;
+    }
+    if entry.attempts == 0 {
+        entry.attempts = 1;
+        return true;
+    }
+    state.remove(tab_id);
+    false
+}
+
+fn gc_idle_webviews(app: &tauri::AppHandle) {
+    let now = now_ts();
+    let layout = LAYOUT_STATE.lock().unwrap().clone();
+    let active = ACTIVE_TAB_ID.lock().unwrap().clone();
+    let current = CURRENT_VIEW.lock().unwrap().clone();
+
+    let mut protected: HashSet<String> = HashSet::new();
+    if !active.is_empty() {
+        protected.insert(active);
+    }
+    if !current.is_empty() {
+        protected.insert(current);
+    }
+    if let LayoutMode::Split = layout.mode {
+        if let Some(left) = layout.left_tab_id {
+            protected.insert(left);
+        }
+        if let Some(right) = layout.right_tab_id {
+            protected.insert(right);
+        }
+    }
+
+    let stale_tabs: Vec<String> = LAST_USED_AT
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(tab_id, ts)| {
+            now.saturating_sub(**ts) > WEBVIEW_IDLE_TTL_SECS && !protected.contains(tab_id.as_str())
+        })
+        .map(|(tab_id, _)| tab_id.clone())
+        .collect();
+
+    for tab_id in stale_tabs {
+        destroy_tab_webview(app, &tab_id);
+    }
+}
+
+fn is_error_url(url: &tauri::Url) -> bool {
+    let raw = url.as_str();
+    raw.starts_with("edge-error://")
+        || raw.starts_with("chrome-error://")
+        || raw.starts_with("about:neterror")
+        || raw.starts_with("about:blank")
+        || raw.starts_with("about:error")
+}
+
 fn ensure_tab_webview(app: &tauri::AppHandle, tab_id: &str, site_id: &str) -> Result<(), String> {
     let window = get_main_window(app)?;
     let (position, size) = calculate_webview_bounds(&window);
@@ -568,6 +695,7 @@ fn ensure_tab_webview(app: &tauri::AppHandle, tab_id: &str, site_id: &str) -> Re
         if let Some(webview) = app.get_webview(&webview_label) {
             let _ = webview.set_position(position);
             let _ = webview.set_size(size);
+            touch_tab(tab_id);
             return Ok(());
         }
 
@@ -586,8 +714,11 @@ fn ensure_tab_webview(app: &tauri::AppHandle, tab_id: &str, site_id: &str) -> Re
         .parse()
         .map_err(|e| format!("URL 解析失败: {}", e))?;
 
+    mark_last_requested_url(tab_id, &url);
+
     let app_handle = app.clone();
     let site_id_clone = site_id.to_string();
+    let tab_id_clone = tab_id.to_string();
 
     let webview_builder = WebviewBuilder::new(&webview_label, WebviewUrl::External(url))
         .user_agent(USER_AGENT)
@@ -596,9 +727,71 @@ fn ensure_tab_webview(app: &tauri::AppHandle, tab_id: &str, site_id: &str) -> Re
         .on_page_load(move |webview, payload| match payload.event() {
             PageLoadEvent::Started => {
                 println!("[{}] 页面开始加载", webview.label());
+                mark_last_requested_url(&tab_id_clone, payload.url());
             }
             PageLoadEvent::Finished => {
+                if is_error_url(payload.url()) {
+                    let error_url = payload.url().as_str().to_string();
+                    let retry_url = LAST_REQUESTED_URL
+                        .lock()
+                        .unwrap()
+                        .get(&tab_id_clone)
+                        .cloned()
+                        .unwrap_or_else(|| error_url.clone());
+                    let should_retry = register_retry_attempt(&tab_id_clone, &retry_url);
+                    let message = if should_retry {
+                        format!("页面加载失败，准备重试，error_url={}", error_url)
+                    } else {
+                        format!("页面加载失败，重试后仍失败，error_url={}", error_url)
+                    };
+                    append_webview_error_log(&tab_id_clone, &site_id_clone, &retry_url, &message);
+
+                    if should_retry {
+                        let app_handle = app_handle.clone();
+                        let tab_id = tab_id_clone.clone();
+                        let retry_url_clone = retry_url.clone();
+                        let site_id_for_spawn = site_id_clone.clone();
+                        tauri::async_runtime::spawn(async move {
+                            tokio::time::sleep(Duration::from_secs(2)).await;
+                            let webview_label = format!("ai_{}", tab_id);
+                            if let Some(child) = app_handle.get_webview(&webview_label) {
+                                if let Ok(url) = retry_url_clone.parse::<tauri::Url>() {
+                                    let _ = child.navigate(url);
+                                } else {
+                                    let message = "重试 URL 解析失败".to_string();
+                                    append_webview_error_log(
+                                        &tab_id,
+                                        &site_id_for_spawn,
+                                        &retry_url_clone,
+                                        &message,
+                                    );
+                                    let payload = WebviewLoadFailedPayload {
+                                        tab_id: tab_id.clone(),
+                                        site_id: site_id_for_spawn.clone(),
+                                        url: retry_url_clone.clone(),
+                                        message,
+                                    };
+                                    let _ = app_handle.emit("webview-load-failed", payload);
+                                    handle_webview_load_failure(&app_handle, &tab_id, &site_id_for_spawn);
+                                }
+                            }
+                        });
+                    } else {
+                        let payload = WebviewLoadFailedPayload {
+                            tab_id: tab_id_clone.clone(),
+                            site_id: site_id_clone.clone(),
+                            url: retry_url.clone(),
+                            message,
+                        };
+                        let _ = app_handle.emit("webview-load-failed", payload);
+                        handle_webview_load_failure(&app_handle, &tab_id_clone, &site_id_clone);
+                    }
+                    return;
+                }
+
                 println!("[{}] 页面加载完成", webview.label());
+                touch_tab(&tab_id_clone);
+                reset_retry_state(&tab_id_clone);
                 let _ = app_handle.emit("webview-loaded", &site_id_clone);
             }
         });
@@ -623,6 +816,7 @@ fn ensure_tab_webview(app: &tauri::AppHandle, tab_id: &str, site_id: &str) -> Re
     println!("[ensure_tab_webview] add_child done label={}", webview_label);
 
     CREATED_VIEWS.lock().unwrap().insert(tab_id.to_string(), true);
+    touch_tab(tab_id);
     Ok(())
 }
 
@@ -636,13 +830,76 @@ fn tab_ids_for_site(site_id: &str) -> Vec<String> {
     ids
 }
 
-fn close_tab_webview(app: &tauri::AppHandle, tab_id: &str) {
+fn destroy_tab_webview(app: &tauri::AppHandle, tab_id: &str) {
     let webview_label = format!("ai_{}", tab_id);
     if let Some(webview) = app.get_webview(&webview_label) {
         let _ = webview.close();
     }
     CREATED_VIEWS.lock().unwrap().remove(tab_id);
+    LAST_USED_AT.lock().unwrap().remove(tab_id);
+    LAST_REQUESTED_URL.lock().unwrap().remove(tab_id);
+    RETRY_STATE.lock().unwrap().remove(tab_id);
+}
+
+fn close_tab_webview(app: &tauri::AppHandle, tab_id: &str) {
+    destroy_tab_webview(app, tab_id);
     TAB_SITE_MAP.lock().unwrap().remove(tab_id);
+}
+
+fn handle_webview_load_failure(app: &tauri::AppHandle, tab_id: &str, site_id: &str) {
+    destroy_tab_webview(app, tab_id);
+
+    let active = ACTIVE_TAB_ID.lock().unwrap().clone();
+    let current = CURRENT_VIEW.lock().unwrap().clone();
+
+    let mut next_active: Option<String> = None;
+    let mut clear_current = false;
+
+    {
+        let mut layout = LAYOUT_STATE.lock().unwrap();
+        match layout.mode {
+            LayoutMode::Single => {
+                if active == tab_id || current == site_id {
+                    clear_current = true;
+                }
+            }
+            LayoutMode::Split => {
+                let mut left = layout.left_tab_id.clone();
+                let mut right = layout.right_tab_id.clone();
+
+                if left.as_deref() == Some(tab_id) {
+                    left = None;
+                }
+                if right.as_deref() == Some(tab_id) {
+                    right = None;
+                }
+
+                if left.is_none() || right.is_none() {
+                    next_active = left.clone().or(right.clone());
+                    layout.mode = LayoutMode::Single;
+                    layout.left_tab_id = None;
+                    layout.right_tab_id = None;
+                } else {
+                    layout.left_tab_id = left;
+                    layout.right_tab_id = right;
+                }
+            }
+        }
+    }
+
+    if let Some(next_tab_id) = next_active {
+        *ACTIVE_TAB_ID.lock().unwrap() = next_tab_id.clone();
+        if let Ok(site) = get_tab_site_id(&next_tab_id) {
+            *CURRENT_VIEW.lock().unwrap() = site;
+        } else {
+            *CURRENT_VIEW.lock().unwrap() = String::new();
+        }
+    } else if clear_current {
+        *ACTIVE_TAB_ID.lock().unwrap() = String::new();
+        *CURRENT_VIEW.lock().unwrap() = String::new();
+    }
+
+    let _ = resize_webviews_inner(app, true);
 }
 
 fn first_site_id_excluding(exclude_site_id: &str) -> Option<String> {
@@ -1198,6 +1455,14 @@ struct TabsStateResponse {
     tabs: Vec<TabInfo>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct WebviewLoadFailedPayload {
+    tab_id: String,
+    site_id: String,
+    url: String,
+    message: String,
+}
+
 /// 获取当前 Tabs 状态（用于前端渲染 TabBar/分屏）
 #[tauri::command]
 fn get_tabs_state(webview: tauri::Webview) -> Result<TabsStateResponse, String> {
@@ -1270,6 +1535,8 @@ async fn switch_tab_inner(app: tauri::AppHandle, tab_id: String) -> Result<(), S
 
     *CURRENT_VIEW.lock().unwrap() = site_id.clone();
     upsert_recent_site(&site_id);
+    touch_tab(&tab_id);
+    gc_idle_webviews(&app);
     Ok(())
 }
 
@@ -1303,6 +1570,7 @@ async fn set_layout(
             layout.right_tab_id = None;
         }
         resize_webviews_inner(&app, true)?;
+        gc_idle_webviews(&app);
         return Ok(());
     }
 
@@ -1310,11 +1578,38 @@ async fn set_layout(
         return Err("mode 仅支持 single|split".to_string());
     }
 
-    let left = left_tab_id.ok_or_else(|| "缺少 left_tab_id".to_string())?;
-    let right = right_tab_id.ok_or_else(|| "缺少 right_tab_id".to_string())?;
-    println!("[set_layout] mode=split left={} right={}", left, right);
-    if left == right {
-        return Err("左右 Tab 不能相同".to_string());
+    let left = left_tab_id.and_then(|id| {
+        let trimmed = id.trim().to_string();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
+    });
+    let right = right_tab_id.and_then(|id| {
+        let trimmed = id.trim().to_string();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
+    });
+
+    if left.is_none() && right.is_none() {
+        return Err("至少需要选择一个 Tab".to_string());
+    }
+
+    if let (Some(ref l), Some(ref r)) = (&left, &right) {
+        println!("[set_layout] mode=split left={} right={}", l, r);
+        if l == r {
+            return Err("左右 Tab 不能相同".to_string());
+        }
+    } else {
+        println!(
+            "[set_layout] mode=split left={} right={}",
+            left.clone().unwrap_or_else(|| "-".to_string()),
+            right.clone().unwrap_or_else(|| "-".to_string())
+        );
     }
 
     // 不要在创建/添加 Webview 时持有 LAYOUT_STATE 锁，避免与 WindowEvent::Resized 产生死锁
@@ -1323,18 +1618,24 @@ async fn set_layout(
         ratio.unwrap_or(layout.ratio).clamp(0.2, 0.8)
     };
 
-    let left_site = get_tab_site_id(&left)?;
-    let right_site = get_tab_site_id(&right)?;
+    if let Some(ref left_id) = left {
+        let left_site = get_tab_site_id(left_id)?;
+        ensure_tab_webview(&app, left_id, &left_site)?;
+        touch_tab(left_id);
+    }
 
-    ensure_tab_webview(&app, &left, &left_site)?;
-    ensure_tab_webview(&app, &right, &right_site)?;
+    if let Some(ref right_id) = right {
+        let right_site = get_tab_site_id(right_id)?;
+        ensure_tab_webview(&app, right_id, &right_site)?;
+        touch_tab(right_id);
+    }
 
     {
         let mut layout = LAYOUT_STATE.lock().unwrap();
         layout.mode = LayoutMode::Split;
         layout.ratio = desired_ratio;
-        layout.left_tab_id = Some(left.clone());
-        layout.right_tab_id = Some(right.clone());
+        layout.left_tab_id = left.clone();
+        layout.right_tab_id = right.clone();
     }
 
     resize_webviews_inner(&app, true)?;
@@ -1342,9 +1643,17 @@ async fn set_layout(
     // 兼容：CURRENT_VIEW 仍返回“当前主站点”，优先 active tab 的站点
     if let Ok(active_site) = get_tab_site_id(&ACTIVE_TAB_ID.lock().unwrap().clone()) {
         *CURRENT_VIEW.lock().unwrap() = active_site;
-    } else if let Ok(site) = get_tab_site_id(&left) {
-        *CURRENT_VIEW.lock().unwrap() = site;
+    } else if let Some(left_id) = left {
+        if let Ok(site) = get_tab_site_id(&left_id) {
+            *CURRENT_VIEW.lock().unwrap() = site;
+        }
+    } else if let Some(right_id) = right {
+        if let Ok(site) = get_tab_site_id(&right_id) {
+            *CURRENT_VIEW.lock().unwrap() = site;
+        }
     }
+
+    gc_idle_webviews(&app);
 
     Ok(())
 }
@@ -1356,13 +1665,7 @@ async fn close_tab(webview: tauri::Webview, app: tauri::AppHandle, tab_id: Strin
         return Err("Not allowed".to_string());
     }
     let closed_site_id = get_tab_site_id(&tab_id).unwrap_or_else(|_| tab_id.clone());
-    let webview_label = format!("ai_{}", tab_id);
-    if let Some(webview) = app.get_webview(&webview_label) {
-        let _ = webview.close();
-    }
-
-    CREATED_VIEWS.lock().unwrap().remove(&tab_id);
-    TAB_SITE_MAP.lock().unwrap().remove(&tab_id);
+    close_tab_webview(&app, &tab_id);
 
     // 注意：不要在 await 时持有 MutexGuard（否则 future 非 Send）
     #[derive(Debug)]
@@ -1456,6 +1759,8 @@ async fn switch_view_inner(app: tauri::AppHandle, site_id: String) -> Result<(),
 
     *CURRENT_VIEW.lock().unwrap() = site_id.clone();
     upsert_recent_site(&site_id);
+    touch_tab(&site_id);
+    gc_idle_webviews(&app);
     Ok(())
 }
 
@@ -1554,8 +1859,6 @@ fn open_devtools(webview: tauri::Webview, app: tauri::AppHandle, site_id: String
         let _ = site_id;
         return Err("Devtools 仅在开发模式可用".to_string());
     }
-
-    Ok(())
 }
 
 /// 设置侧边栏宽度（拖拽调整时调用）

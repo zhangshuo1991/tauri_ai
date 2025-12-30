@@ -138,17 +138,15 @@ async function setSplit(enabled: boolean) {
       return;
     }
 
-    const active = state.active_tab_id || props.currentSiteId;
-    const existing = state.tabs.map((t) => t.tab_id);
-    let leftTabId = state.left_tab_id || active;
-    const rightTabId = state.right_tab_id || existing.find((id) => id !== leftTabId) || "";
-    if (!rightTabId) {
+    const active = state.active_tab_id || props.currentSiteId || "";
+    if (!active) {
       message.warning(t("top.splitNeedTwoTabs"));
       await refresh();
       return;
     }
 
-    await invoke("set_layout", { mode: "split", ratio: state.ratio || 0.5, leftTabId, rightTabId });
+    const leftTabId = state.left_tab_id || active;
+    await invoke("set_layout", { mode: "split", ratio: state.ratio || 0.5, leftTabId });
     await invoke("set_active_tab_id", { tabId: leftTabId });
     await refresh();
   } finally {
@@ -166,8 +164,13 @@ async function updateSplitRatio(ratio: number) {
 
 async function updateSplitTabs(leftTabId: string | null, rightTabId: string | null) {
   if (!tabsState.value) return;
-  if (!leftTabId || !rightTabId) return;
-  await invoke("set_layout", { mode: "split", ratio: tabsState.value.ratio, leftTabId, rightTabId });
+  if (!leftTabId && !rightTabId) return;
+  await invoke("set_layout", {
+    mode: "split",
+    ratio: tabsState.value.ratio,
+    leftTabId: leftTabId ?? null,
+    rightTabId: rightTabId ?? null,
+  });
   await refresh();
 }
 
@@ -179,7 +182,9 @@ async function updateLeftTab(leftTabId: string | null) {
 
 async function updateRightTab(rightTabId: string | null) {
   if (!tabsState.value || !rightTabId) return;
-  await updateSplitTabs(tabsState.value.left_tab_id ?? null, rightTabId);
+  const leftFallback =
+    tabsState.value.left_tab_id || tabsState.value.active_tab_id || props.currentSiteId || null;
+  await updateSplitTabs(leftFallback, rightTabId);
   await invoke("set_active_tab_id", { tabId: rightTabId });
 }
 
@@ -262,7 +267,7 @@ onMounted(() => {
       />
       <n-slider
         style="width: 140px"
-        :disabled="busy"
+        :disabled="busy || !tabsState?.left_tab_id || !tabsState?.right_tab_id"
         :min="0.2"
         :max="0.8"
         :step="0.05"
