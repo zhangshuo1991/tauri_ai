@@ -251,8 +251,8 @@ function onDrop(event: DragEvent, targetId: string) {
         </button>
       </template>
 
-      <template v-if="showRecent && sidebarWidth > 100">
-        <div class="nav-section-title">{{ t("sidebar.sectionRecent") }}</div>
+      <template v-if="showRecent">
+        <div v-if="sidebarWidth > 100" class="nav-section-title">{{ t("sidebar.sectionRecent") }}</div>
         <button
           v-for="site in recentSites.slice(0, 5)"
           :key="`recent_${site.id}`"

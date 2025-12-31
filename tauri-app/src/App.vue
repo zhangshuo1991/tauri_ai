@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch } from "vue";
+import { ref, computed, onMounted, onUnmounted, watch, reactive } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import {
@@ -20,9 +20,9 @@ import {
   NButton,
   NCard,
   NConfigProvider,
-  NDivider,
   NForm,
   NFormItem,
+  NGlobalStyle,
   NInput,
   NInputNumber,
   NModal,
@@ -83,15 +83,50 @@ const topBarRef = ref<InstanceType<typeof TopBar> | null>(null);
 // 事件监听器
 let unlistenLoading: UnlistenFn | null = null;
 let unlistenLoaded: UnlistenFn | null = null;
+let unlistenLoadFailed: UnlistenFn | null = null;
 
 // AI API 设置（MVP：明文存 config.json）
 const aiApiBaseUrl = ref("");
 const aiApiModel = ref("");
-const aiApiKey = ref("");
 
 // i18n + 总结提示词（全局）
 const language = computed(() => currentLanguage.value);
 const globalSummaryPromptTemplate = ref("");
+
+type SettingsDraft = {
+  theme: "dark" | "light";
+  sidebarExpanded: boolean;
+  sidebarWidth: number;
+  language: SupportedLanguage;
+  aiApiBaseUrl: string;
+  aiApiModel: string;
+  aiApiKey: string;
+  summaryPromptTemplate: string;
+  clearApiKey: boolean;
+};
+
+const settingsDraft = reactive<SettingsDraft>({
+  theme: "dark",
+  sidebarExpanded: true,
+  sidebarWidth: EXPANDED_WIDTH,
+  language: "zh-CN",
+  aiApiBaseUrl: "",
+  aiApiModel: "",
+  aiApiKey: "",
+  summaryPromptTemplate: "",
+  clearApiKey: false,
+});
+
+const settingsTab = ref("appearance");
+
+watch(
+  () => settingsDraft.aiApiKey,
+  (value) => {
+    if (value.trim() && settingsDraft.clearApiKey) {
+      settingsDraft.clearApiKey = false;
+    }
+  },
+);
 
 const naiveLocale = computed(() => {
   switch (language.value) {
@@ -110,6 +145,18 @@ const naiveLocale = computed(() => {
       return enUS;
   }
 });
+
+const settingsThemeOverrides = computed(() => ({
+  common: {
+    primaryColor: "#5AA9E6",
+    primaryColorHover: "#6AB5EB",
+    primaryColorPressed: "#4B96D9",
+    primaryColorSuppl: "#5AA9E6",
+  },
+  Button: {
+    borderRadius: "8px",
+  },
+}));
 
 const naiveDateLocale = computed(() => {
   switch (language.value) {
@@ -146,7 +193,6 @@ async function loadSites() {
     recentSiteIds.value = config.recent_site_ids ?? [];
     aiApiBaseUrl.value = config.ai_api_base_url ?? "";
     aiApiModel.value = config.ai_api_model ?? "";
-    aiApiKey.value = config.ai_api_key ?? "";
     globalSummaryPromptTemplate.value = config.summary_prompt_template ?? "";
 
     const nextLang = (config.language ?? "zh-CN") as SupportedLanguage;
@@ -236,10 +282,10 @@ async function toggleTheme() {
   await setTheme(theme.value === "dark" ? "light" : "dark");
 }
 
-const isDarkTheme = computed({
-  get: () => theme.value === "dark",
+const isDarkThemeDraft = computed({
+  get: () => settingsDraft.theme === "dark",
   set: (value: boolean) => {
-    void setTheme(value ? "dark" : "light");
+    settingsDraft.theme = value ? "dark" : "light";
   },
 });
 
@@ -342,37 +388,8 @@ async function saveSiteSettings(payload: { id: string; name: string; url: string
   }
 }
 
-async function saveUiLanguage(value: string | null) {
-  if (!value) return;
-  const lang = value as SupportedLanguage;
-  if (!supportedLanguages.some((l) => l.value === lang)) return;
-  setLanguage(lang);
-  try {
-    await invoke("set_language", { language: lang });
-  } catch (e) {
-    console.error("保存语言失败:", e);
-  }
-}
-
-async function saveGlobalSummaryPromptTemplate() {
-  try {
-    await invoke("set_summary_prompt_template", { template: globalSummaryPromptTemplate.value });
-    try {
-      const cfg = await invoke<AppConfig>("get_config");
-      globalSummaryPromptTemplate.value = cfg.summary_prompt_template ?? globalSummaryPromptTemplate.value;
-    } catch {
-      // ignore
-    }
-    message.success(t("settings.save"));
-  } catch (e) {
-    console.error("保存总结提示词失败:", e);
-    showError(`保存失败: ${e}`);
-  }
-}
-
 async function resetGlobalSummaryPromptTemplate() {
-  globalSummaryPromptTemplate.value = "";
-  await saveGlobalSummaryPromptTemplate();
+  settingsDraft.summaryPromptTemplate = "";
 }
 
 // ========== 一键展开/收缩侧边栏 ==========
@@ -396,15 +413,116 @@ async function toggleSidebar() {
   await setSidebarWidth(nextWidth);
 }
 
-const isSidebarExpanded = computed({
-  get: () => !isCollapsed.value,
+function normalizeSidebarWidth(value: number): number {
+  return Math.max(MIN_SIDEBAR_WIDTH, Math.round(value));
+}
+
+const isSidebarExpandedDraft = computed({
+  get: () => settingsDraft.sidebarExpanded,
   set: (value: boolean) => {
-    void setSidebarWidth(value ? sidebarExpandedWidth.value : MIN_SIDEBAR_WIDTH);
+    settingsDraft.sidebarExpanded = value;
+    if (value && settingsDraft.sidebarWidth < MIN_SIDEBAR_WIDTH) {
+      settingsDraft.sidebarWidth = MIN_SIDEBAR_WIDTH;
+    }
   },
 });
 
+function updateDraftSidebarWidth(value: number | null) {
+  if (typeof value === "number") {
+    settingsDraft.sidebarWidth = normalizeSidebarWidth(value);
+  }
+}
+
+function syncSettingsDraft() {
+  settingsDraft.theme = theme.value === "dark" ? "dark" : "light";
+  settingsDraft.sidebarExpanded = !isCollapsed.value;
+  settingsDraft.sidebarWidth = isCollapsed.value ? sidebarExpandedWidth.value : sidebarWidth.value;
+  settingsDraft.language = currentLanguage.value;
+  settingsDraft.aiApiBaseUrl = aiApiBaseUrl.value;
+  settingsDraft.aiApiModel = aiApiModel.value;
+  settingsDraft.aiApiKey = "";
+  settingsDraft.summaryPromptTemplate = globalSummaryPromptTemplate.value;
+  settingsDraft.clearApiKey = false;
+}
+
 function openSettings() {
+  syncSettingsDraft();
+  settingsTab.value = "appearance";
   showSettings.value = true;
+}
+
+const settingsDirty = computed(() => {
+  const nextWidth = settingsDraft.sidebarExpanded
+    ? normalizeSidebarWidth(settingsDraft.sidebarWidth)
+    : MIN_SIDEBAR_WIDTH;
+  const trimmedBaseUrl = settingsDraft.aiApiBaseUrl.trim();
+  const trimmedModel = settingsDraft.aiApiModel.trim();
+  const trimmedPrompt = settingsDraft.summaryPromptTemplate.trim();
+
+  return (
+    settingsDraft.theme !== theme.value ||
+    settingsDraft.language !== currentLanguage.value ||
+    nextWidth !== sidebarWidth.value ||
+    trimmedBaseUrl !== aiApiBaseUrl.value ||
+    trimmedModel !== aiApiModel.value ||
+    trimmedPrompt !== globalSummaryPromptTemplate.value.trim() ||
+    settingsDraft.aiApiKey.trim() !== "" ||
+    settingsDraft.clearApiKey
+  );
+});
+
+async function saveSettings() {
+  const nextWidth = settingsDraft.sidebarExpanded
+    ? normalizeSidebarWidth(settingsDraft.sidebarWidth)
+    : MIN_SIDEBAR_WIDTH;
+  const trimmedBaseUrl = settingsDraft.aiApiBaseUrl.trim();
+  const trimmedModel = settingsDraft.aiApiModel.trim();
+  const trimmedPrompt = settingsDraft.summaryPromptTemplate.trim();
+
+  try {
+    if (settingsDraft.theme !== theme.value) {
+      await setTheme(settingsDraft.theme);
+    }
+
+    if (nextWidth !== sidebarWidth.value) {
+      await setSidebarWidth(nextWidth);
+    }
+
+    if (settingsDraft.language !== currentLanguage.value) {
+      setLanguage(settingsDraft.language);
+      await invoke("set_language", { language: settingsDraft.language });
+    }
+
+    await invoke("set_ai_api_settings", {
+      baseUrl: trimmedBaseUrl,
+      model: trimmedModel,
+      apiKey: settingsDraft.aiApiKey,
+      clearKey: settingsDraft.clearApiKey,
+    });
+
+    await invoke("set_summary_prompt_template", { template: settingsDraft.summaryPromptTemplate });
+
+    aiApiBaseUrl.value = trimmedBaseUrl;
+    aiApiModel.value = trimmedModel;
+    if (!trimmedPrompt) {
+      try {
+        const cfg = await invoke<AppConfig>("get_config");
+        globalSummaryPromptTemplate.value = cfg.summary_prompt_template ?? "";
+      } catch {
+        globalSummaryPromptTemplate.value = "";
+      }
+    } else {
+      globalSummaryPromptTemplate.value = trimmedPrompt;
+    }
+    settingsDraft.aiApiKey = "";
+    settingsDraft.clearApiKey = false;
+
+    message.success(t("settings.save"));
+    showSettings.value = false;
+  } catch (e) {
+    console.error("保存设置失败:", e);
+    showError(`保存失败: ${e}`);
+  }
 }
 
 async function summarizeCurrentTab() {
@@ -422,44 +540,11 @@ async function summarizeCurrentTab() {
   }
 }
 
-function onSettingsSidebarWidthUpdate(value: number | null) {
-  if (typeof value === "number") {
-    void setSidebarWidth(value);
-  }
-}
-
-async function saveAiApiSettings() {
-  try {
-    await invoke("set_ai_api_settings", {
-      baseUrl: aiApiBaseUrl.value,
-      model: aiApiModel.value,
-      apiKey: aiApiKey.value,
-      clearKey: false,
-    });
-    aiApiKey.value = "";
-    message.success(t("settings.aiApiSaved"));
-  } catch (e) {
-    console.error("保存 AI API 设置失败:", e);
-    showError(`保存失败: ${e}`);
-  }
-}
-
 async function clearAiApiKey() {
   const ok = window.confirm(t("settings.clearApiKeyConfirm"));
   if (!ok) return;
-  try {
-    await invoke("set_ai_api_settings", {
-      baseUrl: aiApiBaseUrl.value,
-      model: aiApiModel.value,
-      apiKey: "",
-      clearKey: true,
-    });
-    aiApiKey.value = "";
-    message.success(t("settings.apiKeyCleared"));
-  } catch (e) {
-    console.error("清空 API Key 失败:", e);
-    showError(`清空失败: ${e}`);
-  }
+  settingsDraft.aiApiKey = "";
+  settingsDraft.clearApiKey = true;
 }
 
 async function resetNavigation() {
@@ -512,6 +597,7 @@ const recentShownSet = computed(() => new Set(recentSitesShown.value.map((s) => 
 const unpinnedSites = computed(() =>
   sites.value
     .filter((s) => !pinnedSet.value.has(s.id))
+    // 为避免“最近”区块与主列表重复，主列表里隐藏最近项（展开/收缩保持一致顺序）
     .filter((s) => !(showRecentSection.value && recentShownSet.value.has(s.id)))
     .filter(siteMatchesQuery),
 );
@@ -570,17 +656,41 @@ onMounted(async () => {
   unlistenLoaded = await listen<string>("webview-loaded", () => {
     loading.value = false;
   });
+
+  unlistenLoadFailed = await listen<{
+    tab_id: string;
+    site_id: string;
+    url: string;
+    message: string;
+  }>("webview-load-failed", async (event) => {
+    loading.value = false;
+    const payload = event.payload;
+    if (payload?.message) {
+      showError(payload.message);
+    } else {
+      showError("页面加载失败");
+    }
+
+    try {
+      currentView.value = await invoke<string>("get_current_view");
+      await topBarRef.value?.refresh?.();
+    } catch (error) {
+      console.error("刷新视图状态失败:", error);
+    }
+  });
 });
 
 // 清理
 onUnmounted(() => {
   if (unlistenLoading) unlistenLoading();
   if (unlistenLoaded) unlistenLoaded();
+  if (unlistenLoadFailed) unlistenLoadFailed();
 });
 </script>
 
 <template>
   <n-config-provider :theme="naiveTheme" :locale="naiveLocale" :date-locale="naiveDateLocale">
+    <n-global-style />
     <div class="app-container">
       <sidebar
         v-model:search="siteSearch"
@@ -642,123 +752,141 @@ onUnmounted(() => {
     </div>
 
     <n-modal v-model:show="showSettings" :mask-closable="true" :close-on-esc="true">
-      <n-card
-        :title="t('settings.title')"
-        closable
-        :bordered="false"
-        size="large"
-        :segmented="{ footer: 'soft' }"
-        :content-style="{ maxHeight: 'calc(100vh - 220px)', overflow: 'auto' }"
-        style="width: 560px; max-width: calc(100vw - 32px)"
-        @close="showSettings = false"
-      >
-        <n-tabs type="line" animated default-value="appearance">
-          <n-tab-pane name="appearance" :tab="t('settings.tabs.appearance')">
-            <n-form label-placement="left" label-width="120" size="medium">
-              <n-form-item :label="t('settings.darkTheme')">
-                <n-switch v-model:value="isDarkTheme" />
-              </n-form-item>
-            </n-form>
-          </n-tab-pane>
+      <n-config-provider :theme="naiveTheme" :theme-overrides="settingsThemeOverrides">
+        <n-card
+          class="settings-card"
+          :title="t('settings.title')"
+          closable
+          :bordered="false"
+          size="large"
+          :segmented="{ footer: 'soft' }"
+          :content-style="{ maxHeight: 'min(70vh, 620px)', overflow: 'auto', padding: '16px 22px 20px' }"
+          :header-style="{ padding: '18px 22px 8px' }"
+          :footer-style="{ padding: '12px 22px', borderTop: '1px solid var(--settings-border)' }"
+          style="width: 640px; max-width: calc(100vw - 32px)"
+          @close="showSettings = false"
+        >
+          <n-tabs v-model:value="settingsTab" type="line" animated class="settings-tabs">
+            <n-tab-pane name="appearance" :tab="t('settings.tabs.appearance')">
+              <div class="settings-panel">
+                <n-form label-placement="left" label-width="120" size="medium">
+                  <n-form-item :label="t('settings.darkTheme')">
+                    <n-switch v-model:value="isDarkThemeDraft" />
+                  </n-form-item>
+                </n-form>
+              </div>
+            </n-tab-pane>
 
-          <n-tab-pane name="layout" :tab="t('settings.tabs.layout')">
-            <n-form label-placement="left" label-width="120" size="medium">
-              <n-form-item :label="t('settings.sidebarExpand')">
-                <n-switch v-model:value="isSidebarExpanded" />
-              </n-form-item>
-              <n-form-item :label="t('settings.sidebarWidth')">
-                <n-input-number
-                  :disabled="!isSidebarExpanded"
-                  :min="MIN_SIDEBAR_WIDTH"
-                  :max="260"
-                  :step="4"
-                  :value="sidebarWidth"
-                  style="width: 220px"
-                  @update:value="onSettingsSidebarWidthUpdate"
-                />
-              </n-form-item>
-            </n-form>
-          </n-tab-pane>
-
-          <n-tab-pane name="language" :tab="t('settings.tabs.language')">
-            <n-space vertical size="medium">
-              <n-form label-placement="left" label-width="120" size="medium">
-                <n-form-item :label="t('settings.language')">
-                  <n-select
-                    style="width: 220px"
-                    :value="language"
-                    :options="supportedLanguages"
-                    @update:value="saveUiLanguage"
-                  />
-                </n-form-item>
-              </n-form>
-              <n-alert type="info" :show-icon="false">
-                {{ t("settings.languageHint") }}
-              </n-alert>
-            </n-space>
-          </n-tab-pane>
-
-          <n-tab-pane name="ai" :tab="t('settings.tabs.ai')">
-            <n-space vertical size="large">
-              <n-form label-placement="left" label-width="120" size="medium">
-                <n-form-item label="Base URL">
-                  <n-input v-model:value="aiApiBaseUrl" placeholder="https://api.openai.com/v1" />
-                </n-form-item>
-                <n-form-item label="Model">
-                  <n-input v-model:value="aiApiModel" placeholder="例如：gpt-4o-mini / deepseek-chat" />
-                </n-form-item>
-                <n-form-item label="API Key">
-                  <n-input v-model:value="aiApiKey" type="password" show-password-on="click" placeholder="已保存（不回显）；留空表示不修改" />
-                </n-form-item>
-                <n-form-item>
-                  <div style="display: flex; gap: 10px; flex-wrap: wrap">
-                    <n-button type="primary" @click="saveAiApiSettings">{{ t("settings.saveApiSettings") }}</n-button>
-                    <n-button tertiary type="warning" @click="clearAiApiKey">{{ t("settings.clearKey") }}</n-button>
-                  </div>
-                </n-form-item>
-              </n-form>
-
-              <n-divider style="margin: 0" />
-
-              <n-space vertical size="small">
-                <n-form label-placement="top" size="medium">
-                  <n-form-item :label="t('settings.summaryPromptTemplate')">
-                    <n-input
-                      v-model:value="globalSummaryPromptTemplate"
-                      type="textarea"
-                      :autosize="{ minRows: 8, maxRows: 14 }"
-                      :placeholder="t('settings.summaryPromptHint', { language: '{language}', text: '{text}' })"
+            <n-tab-pane name="layout" :tab="t('settings.tabs.layout')">
+              <div class="settings-panel">
+                <n-form label-placement="left" label-width="120" size="medium">
+                  <n-form-item :label="t('settings.sidebarExpand')">
+                    <n-switch v-model:value="isSidebarExpandedDraft" />
+                  </n-form-item>
+                  <n-form-item :label="t('settings.sidebarWidth')">
+                    <n-input-number
+                      :disabled="!isSidebarExpandedDraft"
+                      :min="MIN_SIDEBAR_WIDTH"
+                      :max="260"
+                      :step="4"
+                      :value="settingsDraft.sidebarWidth"
+                      style="width: 220px"
+                      @update:value="updateDraftSidebarWidth"
                     />
                   </n-form-item>
                 </n-form>
+              </div>
+            </n-tab-pane>
+
+            <n-tab-pane name="language" :tab="t('settings.tabs.language')">
+              <n-space vertical size="medium">
+                <div class="settings-panel">
+                  <n-form label-placement="left" label-width="120" size="medium">
+                    <n-form-item :label="t('settings.language')">
+                      <n-select
+                        style="width: 220px"
+                        :value="settingsDraft.language"
+                        :options="supportedLanguages"
+                        @update:value="(v) => (settingsDraft.language = v as SupportedLanguage)"
+                      />
+                    </n-form-item>
+                  </n-form>
+                </div>
                 <n-alert type="info" :show-icon="false">
-                  {{ t("settings.summaryPromptHint", { language: "{language}", text: "{text}" }) }}
+                  {{ t("settings.languageHint") }}
                 </n-alert>
-                <div style="display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end">
-                  <n-button tertiary @click="resetGlobalSummaryPromptTemplate">{{ t("settings.resetToDefault") }}</n-button>
-                  <n-button type="primary" @click="saveGlobalSummaryPromptTemplate">{{ t("settings.savePromptTemplate") }}</n-button>
+              </n-space>
+            </n-tab-pane>
+
+            <n-tab-pane name="ai" :tab="t('settings.tabs.ai')">
+              <n-space vertical size="large">
+                <div class="settings-panel">
+                  <n-form label-placement="left" label-width="120" size="medium">
+                    <n-form-item label="Base URL">
+                      <n-input v-model:value="settingsDraft.aiApiBaseUrl" placeholder="https://api.openai.com/v1" />
+                    </n-form-item>
+                    <n-form-item label="Model">
+                      <n-input v-model:value="settingsDraft.aiApiModel" placeholder="例如：gpt-4o-mini / deepseek-chat" />
+                    </n-form-item>
+                    <n-form-item label="API Key">
+                      <n-input
+                        v-model:value="settingsDraft.aiApiKey"
+                        type="password"
+                        show-password-on="click"
+                        placeholder="已保存（不回显）；留空表示不修改"
+                      />
+                    </n-form-item>
+                    <n-form-item>
+                      <n-button tertiary type="warning" @click="clearAiApiKey">
+                        {{ t("settings.clearKey") }}
+                      </n-button>
+                    </n-form-item>
+                  </n-form>
+                </div>
+
+                <div class="settings-panel">
+                  <n-form label-placement="top" size="medium">
+                    <n-form-item :label="t('settings.summaryPromptTemplate')">
+                      <n-input
+                        v-model:value="settingsDraft.summaryPromptTemplate"
+                        type="textarea"
+                        :autosize="{ minRows: 6, maxRows: 12 }"
+                        :placeholder="t('settings.summaryPromptHint', { language: '{language}', text: '{text}' })"
+                      />
+                    </n-form-item>
+                  </n-form>
+                  <n-alert type="info" :show-icon="false">
+                    {{ t("settings.summaryPromptHint", { language: "{language}", text: "{text}" }) }}
+                  </n-alert>
+                  <div class="settings-actions">
+                    <n-button tertiary @click="resetGlobalSummaryPromptTemplate">{{ t("settings.resetToDefault") }}</n-button>
+                  </div>
                 </div>
               </n-space>
-            </n-space>
-          </n-tab-pane>
+            </n-tab-pane>
 
-          <n-tab-pane name="advanced" :tab="t('settings.tabs.advanced')">
-            <n-alert type="warning" :bordered="false">
-              {{ t("settings.resetNavContent") }}
-            </n-alert>
-            <div style="margin-top: 12px">
-              <n-button tertiary type="error" @click="resetNavigation">{{ t("settings.resetNavButton") }}</n-button>
+            <n-tab-pane name="advanced" :tab="t('settings.tabs.advanced')">
+              <div class="settings-panel">
+                <n-alert type="warning" :bordered="false">
+                  {{ t("settings.resetNavContent") }}
+                </n-alert>
+                <div class="settings-actions">
+                  <n-button tertiary type="error" @click="resetNavigation">{{ t("settings.resetNavButton") }}</n-button>
+                </div>
+              </div>
+            </n-tab-pane>
+          </n-tabs>
+
+          <template #footer>
+            <div class="settings-footer">
+              <n-button @click="showSettings = false">{{ t("settings.cancel") }}</n-button>
+              <n-button type="primary" :disabled="!settingsDirty" @click="saveSettings">
+                {{ t("settings.save") }}
+              </n-button>
             </div>
-          </n-tab-pane>
-        </n-tabs>
-
-        <template #footer>
-          <div style="display: flex; justify-content: flex-end; gap: 10px">
-            <n-button @click="showSettings = false">{{ t("settings.cancel") }}</n-button>
-            <n-button type="primary" @click="showSettings = false">{{ t("settings.done") }}</n-button>
-          </div>
-        </template>
-      </n-card>
+          </template>
+        </n-card>
+      </n-config-provider>
     </n-modal>
   </n-config-provider>
 </template>
@@ -777,6 +905,10 @@ onUnmounted(() => {
   --active-bg: rgba(137, 180, 250, 0.15);
   --error: #f38ba8;
   --danger: #f38ba8;
+  --settings-surface: #1f2228;
+  --settings-border: #2b2f36;
+  --settings-muted: #9aa3af;
+  --settings-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
 }
 
 /* 浅色主题 */
@@ -792,6 +924,10 @@ onUnmounted(() => {
   --active-bg: rgba(30, 102, 245, 0.15);
   --error: #d20f39;
   --danger: #d20f39;
+  --settings-surface: #ffffff;
+  --settings-border: #e6e8ec;
+  --settings-muted: #6b7280;
+  --settings-shadow: 0 16px 40px rgba(0, 0, 0, 0.08);
 }
 
 * {
@@ -872,6 +1008,39 @@ html, body {
 @keyframes loading {
   0% { background-position: 200% 0; }
   100% { background-position: -200% 0; }
+}
+
+.settings-card {
+  background: var(--settings-surface);
+  border: 1px solid var(--settings-border);
+  box-shadow: var(--settings-shadow);
+}
+
+.settings-panel {
+  background: var(--settings-surface);
+  border: 1px solid var(--settings-border);
+  border-radius: 12px;
+  padding: 16px;
+}
+
+.settings-tabs :deep(.n-tabs-nav) {
+  margin-bottom: 14px;
+}
+
+.settings-tabs :deep(.n-tabs-tab) {
+  font-size: 13px;
+}
+
+.settings-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.settings-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
 }
 
 </style>

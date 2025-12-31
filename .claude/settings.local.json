@@ -4,7 +4,10 @@
       "Bash(find:*)",
       "Bash(ls:*)",
       "Bash(pnpm tauri dev:*)",
-      "Bash(cargo check:*)"
+      "Bash(cargo check:*)",
+      "Bash(tree:*)",
+      "Bash(du:*)",
+      "WebSearch"
     ]
   }
 }
