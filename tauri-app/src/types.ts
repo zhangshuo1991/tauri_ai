@@ -21,6 +21,8 @@ export interface AppConfig {
   ai_api_model: string;
   ai_api_key: string;
   active_project_id: string;
+  last_active_tab_id?: string;
+  last_active_site_id?: string;
 }
 
 export interface ProjectSummary {

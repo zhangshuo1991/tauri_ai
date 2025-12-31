@@ -118,6 +118,10 @@ pub struct AppConfig {
     pub ai_api_key: String,
     #[serde(default)]
     pub active_project_id: String,
+    #[serde(default)]
+    pub last_active_tab_id: String,
+    #[serde(default)]
+    pub last_active_site_id: String,
 }
 
 fn default_sidebar_expanded_width() -> f64 {
@@ -153,6 +157,8 @@ impl Default for AppConfig {
             ai_api_model: "".to_string(),
             ai_api_key: "".to_string(),
             active_project_id: "".to_string(),
+            last_active_tab_id: String::new(),
+            last_active_site_id: String::new(),
         }
     }
 }
@@ -317,6 +323,23 @@ fn load_config() -> AppConfig {
                             seen_recent.insert(id.clone());
                             true
                         });
+
+                        // 启动恢复：仅允许恢复存在的站点（Tab 仅限主 Tab）
+                        let last_site = config.last_active_site_id.trim().to_string();
+                        if last_site.is_empty() || !existing_ids.contains(&last_site) {
+                            config.last_active_site_id.clear();
+                            config.last_active_tab_id.clear();
+                        } else {
+                            config.last_active_site_id = last_site.clone();
+                            if config.last_active_tab_id.trim().is_empty()
+                                || !existing_ids.contains(&config.last_active_tab_id)
+                            {
+                                config.last_active_tab_id = last_site;
+                            } else {
+                                // 额外 Tab 不做持久化恢复，统一回落到主 Tab
+                                config.last_active_tab_id = last_site;
+                            }
+                        }
 
                         // 将清理/补齐后的配置写回，避免重复脏数据导致 UI 重复
                         let _ = save_config(&config);
@@ -592,6 +615,31 @@ fn upsert_recent_site(site_id: &str) {
     let _ = save_config(&config);
 }
 
+fn update_last_active(tab_id: &str, site_id: &str) {
+    let tab_id = tab_id.trim();
+    let site_id = site_id.trim();
+    if tab_id.is_empty() || site_id.is_empty() {
+        return;
+    }
+    let mut config = APP_CONFIG.lock().unwrap();
+    if config.last_active_tab_id == tab_id && config.last_active_site_id == site_id {
+        return;
+    }
+    config.last_active_tab_id = tab_id.to_string();
+    config.last_active_site_id = site_id.to_string();
+    let _ = save_config(&config);
+}
+
+fn clear_last_active() {
+    let mut config = APP_CONFIG.lock().unwrap();
+    if config.last_active_tab_id.is_empty() && config.last_active_site_id.is_empty() {
+        return;
+    }
+    config.last_active_tab_id.clear();
+    config.last_active_site_id.clear();
+    let _ = save_config(&config);
+}
+
 fn touch_tab(tab_id: &str) {
     if tab_id.trim().is_empty() {
         return;
@@ -678,6 +726,41 @@ fn is_error_url(url: &tauri::Url) -> bool {
         || raw.starts_with("about:neterror")
         || raw.starts_with("about:blank")
         || raw.starts_with("about:error")
+}
+
+fn restore_last_active_state(app: &tauri::AppHandle) {
+    let site_id = {
+        let config = APP_CONFIG.lock().unwrap();
+        config.last_active_site_id.clone()
+    };
+
+    if site_id.trim().is_empty() {
+        return;
+    }
+
+    if get_site_by_id(&site_id).is_err() {
+        clear_last_active();
+        return;
+    }
+
+    {
+        let mut layout = LAYOUT_STATE.lock().unwrap();
+        layout.mode = LayoutMode::Single;
+        layout.left_tab_id = None;
+        layout.right_tab_id = None;
+    }
+
+    *ACTIVE_TAB_ID.lock().unwrap() = site_id.clone();
+    *CURRENT_VIEW.lock().unwrap() = site_id.clone();
+
+    if ensure_tab_webview(app, &site_id, &site_id).is_err() {
+        *ACTIVE_TAB_ID.lock().unwrap() = String::new();
+        *CURRENT_VIEW.lock().unwrap() = String::new();
+        clear_last_active();
+        return;
+    }
+
+    let _ = resize_webviews_inner(app, true);
 }
 
 fn ensure_tab_webview(app: &tauri::AppHandle, tab_id: &str, site_id: &str) -> Result<(), String> {
@@ -890,13 +973,16 @@ fn handle_webview_load_failure(app: &tauri::AppHandle, tab_id: &str, site_id: &s
     if let Some(next_tab_id) = next_active {
         *ACTIVE_TAB_ID.lock().unwrap() = next_tab_id.clone();
         if let Ok(site) = get_tab_site_id(&next_tab_id) {
-            *CURRENT_VIEW.lock().unwrap() = site;
+            *CURRENT_VIEW.lock().unwrap() = site.clone();
+            update_last_active(&next_tab_id, &site);
         } else {
             *CURRENT_VIEW.lock().unwrap() = String::new();
+            clear_last_active();
         }
     } else if clear_current {
         *ACTIVE_TAB_ID.lock().unwrap() = String::new();
         *CURRENT_VIEW.lock().unwrap() = String::new();
+        clear_last_active();
     }
 
     let _ = resize_webviews_inner(app, true);
@@ -1274,6 +1360,9 @@ fn set_active_tab_id(webview: tauri::Webview, tab_id: String) -> Result<(), Stri
         return Ok(());
     }
     *ACTIVE_TAB_ID.lock().unwrap() = tab_id;
+    if let Ok(site_id) = get_tab_site_id(&tab_id) {
+        update_last_active(&tab_id, &site_id);
+    }
     Ok(())
 }
 
@@ -1535,6 +1624,7 @@ async fn switch_tab_inner(app: tauri::AppHandle, tab_id: String) -> Result<(), S
 
     *CURRENT_VIEW.lock().unwrap() = site_id.clone();
     upsert_recent_site(&site_id);
+    update_last_active(&tab_id, &site_id);
     touch_tab(&tab_id);
     gc_idle_webviews(&app);
     Ok(())
@@ -1724,6 +1814,7 @@ async fn close_tab(webview: tauri::Webview, app: tauri::AppHandle, tab_id: Strin
         CloseFallback::ClearToEmpty => {
             *ACTIVE_TAB_ID.lock().unwrap() = String::new();
             *CURRENT_VIEW.lock().unwrap() = String::new();
+            clear_last_active();
         }
         CloseFallback::SwitchToFirstSite(site_id) => {
             *ACTIVE_TAB_ID.lock().unwrap() = String::new();
@@ -1759,6 +1850,7 @@ async fn switch_view_inner(app: tauri::AppHandle, site_id: String) -> Result<(),
 
     *CURRENT_VIEW.lock().unwrap() = site_id.clone();
     upsert_recent_site(&site_id);
+    update_last_active(&site_id, &site_id);
     touch_tab(&site_id);
     gc_idle_webviews(&app);
     Ok(())
@@ -1816,6 +1908,7 @@ fn clear_view_cache(webview: tauri::Webview, app: tauri::AppHandle, site_id: Str
     if current == site_id {
         *CURRENT_VIEW.lock().unwrap() = String::new();
         *ACTIVE_TAB_ID.lock().unwrap() = String::new();
+        clear_last_active();
     }
 
     Ok(())
@@ -2041,6 +2134,7 @@ fn update_site(
             *CURRENT_VIEW.lock().unwrap() = String::new();
             *ACTIVE_TAB_ID.lock().unwrap() = String::new();
             *LAYOUT_STATE.lock().unwrap() = LayoutState::default();
+            clear_last_active();
         }
     }
 
@@ -2069,6 +2163,10 @@ fn remove_site(webview: tauri::Webview, app: tauri::AppHandle, site_id: String) 
     config.site_order.retain(|id| id != &site_id);
     config.pinned_site_ids.retain(|id| id != &site_id);
     config.recent_site_ids.retain(|id| id != &site_id);
+    if config.last_active_site_id == site_id {
+        config.last_active_site_id.clear();
+        config.last_active_tab_id.clear();
+    }
     save_config(&config)?;
 
     // 关闭对应的 Webview
@@ -2083,6 +2181,7 @@ fn remove_site(webview: tauri::Webview, app: tauri::AppHandle, site_id: String) 
         *CURRENT_VIEW.lock().unwrap() = String::new();
         *ACTIVE_TAB_ID.lock().unwrap() = String::new();
         *LAYOUT_STATE.lock().unwrap() = LayoutState::default();
+        clear_last_active();
     }
 
     Ok(())
@@ -2319,6 +2418,8 @@ pub fn run() {
                     }
                 });
             }
+
+            restore_last_active_state(&app_handle);
 
             Ok(())
         })
