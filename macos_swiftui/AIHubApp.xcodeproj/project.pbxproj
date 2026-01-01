@@ -1,0 +1,298 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		F00000000000000000000200 /* AIHubApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000100 /* AIHubApp.swift */; };
+		F00000000000000000000201 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000101 /* AppModel.swift */; };
+		F00000000000000000000202 /* I18n.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000102 /* I18n.swift */; };
+		F00000000000000000000203 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000103 /* Models.swift */; };
+		F00000000000000000000204 /* Storage.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000104 /* Storage.swift */; };
+		F00000000000000000000205 /* WebViewManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000105 /* WebViewManager.swift */; };
+		F00000000000000000000206 /* AddSiteView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000106 /* AddSiteView.swift */; };
+		F00000000000000000000207 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000107 /* ContentView.swift */; };
+		F00000000000000000000208 /* IconPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000108 /* IconPickerView.swift */; };
+		F00000000000000000000209 /* ProjectContextView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000109 /* ProjectContextView.swift */; };
+		F0000000000000000000020A /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0000000000000000000010A /* SettingsView.swift */; };
+		F0000000000000000000020B /* SidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0000000000000000000010B /* SidebarView.swift */; };
+		F0000000000000000000020C /* SiteSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0000000000000000000010C /* SiteSettingsView.swift */; };
+		F0000000000000000000020D /* SummaryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0000000000000000000010D /* SummaryView.swift */; };
+		F0000000000000000000020E /* TopBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0000000000000000000010E /* TopBarView.swift */; };
+		F0000000000000000000020F /* WebViewContainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0000000000000000000010F /* WebViewContainer.swift */; };
+		F00000000000000000000211 /* LogoStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000110 /* LogoStore.swift */; };
+		F00000000000000000000216 /* ViewStyles.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000115 /* ViewStyles.swift */; };
+		F00000000000000000000220 /* AppIcon.icns in Resources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000120 /* AppIcon.icns */; };
+		F00000000000000000000221 /* site-config.json in Resources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000121 /* site-config.json */; };
+		F00000000000000000000210 /* WebKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F00000000000000000000013 /* WebKit.framework */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		F00000000000000000000100 /* AIHubApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIHubApp.swift; sourceTree = "<group>"; };
+		F00000000000000000000101 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
+		F00000000000000000000102 /* I18n.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = I18n.swift; sourceTree = "<group>"; };
+		F00000000000000000000103 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		F00000000000000000000104 /* Storage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Storage.swift; sourceTree = "<group>"; };
+		F00000000000000000000105 /* WebViewManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebViewManager.swift; sourceTree = "<group>"; };
+		F00000000000000000000106 /* AddSiteView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AddSiteView.swift; sourceTree = "<group>"; };
+		F00000000000000000000107 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		F00000000000000000000108 /* IconPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IconPickerView.swift; sourceTree = "<group>"; };
+		F00000000000000000000109 /* ProjectContextView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectContextView.swift; sourceTree = "<group>"; };
+		F0000000000000000000010A /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		F0000000000000000000010B /* SidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarView.swift; sourceTree = "<group>"; };
+		F0000000000000000000010C /* SiteSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SiteSettingsView.swift; sourceTree = "<group>"; };
+		F0000000000000000000010D /* SummaryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SummaryView.swift; sourceTree = "<group>"; };
+		F0000000000000000000010E /* TopBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopBarView.swift; sourceTree = "<group>"; };
+		F0000000000000000000010F /* WebViewContainer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebViewContainer.swift; sourceTree = "<group>"; };
+		F00000000000000000000110 /* LogoStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogoStore.swift; sourceTree = "<group>"; };
+		F00000000000000000000115 /* ViewStyles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ViewStyles.swift; sourceTree = "<group>"; };
+		F00000000000000000000120 /* AppIcon.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; path = AppIcon.icns; sourceTree = "<group>"; };
+		F00000000000000000000121 /* site-config.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "site-config.json"; sourceTree = "<group>"; };
+		F00000000000000000000011 /* AIHubApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; path = AIHubApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		F00000000000000000000012 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = AIHubApp/Info.plist; sourceTree = "<group>"; };
+		F00000000000000000000013 /* WebKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WebKit.framework; path = System/Library/Frameworks/WebKit.framework; sourceTree = SDKROOT; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		F00000000000000000000010 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				F00000000000000000000210 /* WebKit.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		F00000000000000000000002 = {
+			isa = PBXGroup;
+			children = (
+				F00000000000000000000005 /* AIHubApp */,
+				F00000000000000000000012 /* Info.plist */,
+				F00000000000000000000004 /* Frameworks */,
+				F00000000000000000000003 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		F00000000000000000000005 /* AIHubApp */ = {
+			isa = PBXGroup;
+			children = (
+				F00000000000000000000100 /* AIHubApp.swift */,
+				F00000000000000000000101 /* AppModel.swift */,
+				F00000000000000000000102 /* I18n.swift */,
+				F00000000000000000000103 /* Models.swift */,
+				F00000000000000000000104 /* Storage.swift */,
+				F00000000000000000000110 /* LogoStore.swift */,
+				F00000000000000000000105 /* WebViewManager.swift */,
+				F00000000000000000000006 /* Views */,
+				F00000000000000000000014 /* Resources */,
+			);
+			path = Sources/AIHubApp;
+			sourceTree = "<group>";
+		};
+		F00000000000000000000006 /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				F00000000000000000000106 /* AddSiteView.swift */,
+				F00000000000000000000107 /* ContentView.swift */,
+				F00000000000000000000108 /* IconPickerView.swift */,
+				F00000000000000000000109 /* ProjectContextView.swift */,
+				F0000000000000000000010A /* SettingsView.swift */,
+				F0000000000000000000010B /* SidebarView.swift */,
+				F0000000000000000000010C /* SiteSettingsView.swift */,
+				F0000000000000000000010D /* SummaryView.swift */,
+				F0000000000000000000010E /* TopBarView.swift */,
+				F0000000000000000000010F /* WebViewContainer.swift */,
+				F00000000000000000000115 /* ViewStyles.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		F00000000000000000000014 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				F00000000000000000000120 /* AppIcon.icns */,
+				F00000000000000000000121 /* site-config.json */,
+				F00000000000000000000015 /* Logos */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		F00000000000000000000015 /* Logos */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = Logos;
+			sourceTree = "<group>";
+		};
+		F00000000000000000000004 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				F00000000000000000000013 /* WebKit.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		F00000000000000000000003 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				F00000000000000000000011 /* AIHubApp.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		F00000000000000000000007 /* AIHubApp */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F00000000000000000000009 /* Build configuration list for PBXNativeTarget "AIHubApp" */;
+			buildPhases = (
+				F0000000000000000000000E /* Sources */,
+				F0000000000000000000000F /* Resources */,
+				F00000000000000000000010 /* Frameworks */,
+			);
+			buildRules = ();
+			dependencies = ();
+			name = AIHubApp;
+			productName = AIHubApp;
+			productReference = F00000000000000000000011 /* AIHubApp.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		F00000000000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastSwiftUpdateCheck = 1500;
+				LastUpgradeCheck = 1500;
+			};
+			buildConfigurationList = F00000000000000000000008 /* Build configuration list for PBXProject "AIHubApp" */;
+			compatibilityVersion = "Xcode 15.0";
+			developmentRegion = en;
+			knownRegions = (
+				en,
+			);
+			mainGroup = F00000000000000000000002;
+			productRefGroup = F00000000000000000000003 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				F00000000000000000000007 /* AIHubApp */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		F0000000000000000000000F /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				F00000000000000000000220 /* AppIcon.icns in Resources */,
+				F00000000000000000000221 /* site-config.json in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		F0000000000000000000000E /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				F00000000000000000000200 /* AIHubApp.swift in Sources */,
+				F00000000000000000000201 /* AppModel.swift in Sources */,
+				F00000000000000000000202 /* I18n.swift in Sources */,
+				F00000000000000000000203 /* Models.swift in Sources */,
+				F00000000000000000000204 /* Storage.swift in Sources */,
+				F00000000000000000000211 /* LogoStore.swift in Sources */,
+				F00000000000000000000205 /* WebViewManager.swift in Sources */,
+				F00000000000000000000206 /* AddSiteView.swift in Sources */,
+				F00000000000000000000207 /* ContentView.swift in Sources */,
+				F00000000000000000000208 /* IconPickerView.swift in Sources */,
+				F00000000000000000000209 /* ProjectContextView.swift in Sources */,
+				F0000000000000000000020A /* SettingsView.swift in Sources */,
+				F0000000000000000000020B /* SidebarView.swift in Sources */,
+				F0000000000000000000020C /* SiteSettingsView.swift in Sources */,
+				F0000000000000000000020D /* SummaryView.swift in Sources */,
+				F0000000000000000000020E /* TopBarView.swift in Sources */,
+				F0000000000000000000020F /* WebViewContainer.swift in Sources */,
+				F00000000000000000000216 /* ViewStyles.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		F0000000000000000000000A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_OBJC_ARC = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		F0000000000000000000000B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_OBJC_ARC = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		F0000000000000000000000C /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGNING_ALLOWED = NO;
+				INFOPLIST_FILE = AIHubApp/Info.plist;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.aihub.app;
+				PRODUCT_NAME = AIHubApp;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		F0000000000000000000000D /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGNING_ALLOWED = NO;
+				INFOPLIST_FILE = AIHubApp/Info.plist;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.aihub.app;
+				PRODUCT_NAME = AIHubApp;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		F00000000000000000000008 /* Build configuration list for PBXProject "AIHubApp" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F0000000000000000000000A /* Debug */,
+				F0000000000000000000000B /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		F00000000000000000000009 /* Build configuration list for PBXNativeTarget "AIHubApp" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F0000000000000000000000C /* Debug */,
+				F0000000000000000000000D /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = F00000000000000000000001 /* Project object */;
+}

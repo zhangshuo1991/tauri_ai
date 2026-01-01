@@ -1,0 +1,39 @@
+{
+  "sites": [
+      {
+        "id": "deepseek",
+        "name": "DeepSeek",
+        "url": "https://chat.deepseek.com/",
+        "icon": "deepseek.png",
+        "summary_prompt_override": ""
+      },
+      {
+        "id": "doubao",
+        "name": "豆包",
+        "url": "https://www.doubao.com/",
+        "icon": "doubao.png",
+        "summary_prompt_override": ""
+      },
+      {
+        "id": "openai",
+        "name": "ChatGPT",
+        "url": "https://chat.openai.com/",
+        "icon": "openai.png",
+        "summary_prompt_override": ""
+      },
+      {
+        "id": "qianwen",
+        "name": "通义千问",
+        "url": "https://www.qianwen.com/",
+        "icon": "qianwen.png",
+        "summary_prompt_override": ""
+      },
+      {
+        "id": "gemini",
+        "name": "Google Gemini",
+        "url": "https://gemini.google.com/app",
+        "icon": "gemini.webp",
+        "summary_prompt_override": ""
+      }
+  ]
+}

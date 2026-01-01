@@ -1,0 +1,338 @@
+import SwiftUI
+
+struct SettingsView: View {
+    @EnvironmentObject private var model: AppModel
+
+    @Binding var isPresented: Bool
+
+    @State private var draft = SettingsDraft()
+    @State private var showClearKeyAlert = false
+    @State private var showResetAlert = false
+
+    private let minSidebarWidth: Double = 64
+    private let fieldLabelWidth: CGFloat = 90
+    private let fieldHeight: CGFloat = 36
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            Text(model.t("settings.title"))
+                .font(.system(size: 14, weight: .semibold))
+                .padding(.top, 16)
+                .padding(.bottom, 12)
+
+            // Tab View
+            TabView {
+                appearanceTab
+                    .tabItem {
+                        Label(model.t("settings.tabs.appearance"), systemImage: "paintbrush")
+                    }
+                layoutTab
+                    .tabItem {
+                        Label(model.t("settings.tabs.layout"), systemImage: "sidebar.squares.left")
+                    }
+                languageTab
+                    .tabItem {
+                        Label(model.t("settings.tabs.language"), systemImage: "globe")
+                    }
+                aiTab
+                    .tabItem {
+                        Label(model.t("settings.tabs.ai"), systemImage: "sparkles")
+                    }
+                advancedTab
+                    .tabItem {
+                        Label(model.t("settings.tabs.advanced"), systemImage: "gearshape.2")
+                    }
+            }
+            .frame(width: 520, height: 340)
+
+            SubtleDivider()
+                .padding(.horizontal, 16)
+
+            // Footer Buttons
+            HStack {
+                Spacer()
+                Button(model.t("settings.cancel")) {
+                    isPresented = false
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.regular)
+
+                Button(model.t("settings.save")) {
+                    save()
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.regular)
+                .disabled(!isDirty)
+                .keyboardShortcut(.defaultAction)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+        }
+        .frame(width: 560)
+        .onAppear { syncDraft() }
+        .alert(model.t("settings.clearApiKeyConfirm"), isPresented: $showClearKeyAlert) {
+            Button(model.t("settings.clearKey"), role: .destructive) {
+                draft.aiApiKey = ""
+                draft.clearApiKey = true
+            }
+            Button(model.t("settings.cancel"), role: .cancel) {}
+        }
+        .alert(model.t("settings.resetNavTitle"), isPresented: $showResetAlert) {
+            Button(model.t("settings.resetNavConfirm"), role: .destructive) {
+                model.resetNavigation()
+            }
+            Button(model.t("settings.cancel"), role: .cancel) {}
+        } message: {
+            Text(model.t("settings.resetNavContent"))
+        }
+    }
+
+    private var appearanceTab: some View {
+        Form {
+            Section {
+                Toggle(isOn: Binding(
+                    get: { draft.theme == "dark" },
+                    set: { draft.theme = $0 ? "dark" : "light" }
+                )) {
+                    Label(model.t("settings.darkTheme"), systemImage: "moon.fill")
+                }
+            } header: {
+                Text(model.t("settings.tabs.appearance"))
+            }
+        }
+        .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
+    }
+
+    private var layoutTab: some View {
+        Form {
+            Section {
+                Toggle(isOn: $draft.sidebarExpanded) {
+                    Label(model.t("settings.sidebarExpand"), systemImage: "sidebar.left")
+                }
+
+                if draft.sidebarExpanded {
+                    HStack {
+                        Label(model.t("settings.sidebarWidth"), systemImage: "arrow.left.and.right")
+                        Spacer()
+                        Slider(value: $draft.sidebarWidth, in: minSidebarWidth...260, step: 4)
+                            .frame(width: 160)
+                        Text(String(format: "%.0f", draft.sidebarWidth))
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundColor(.secondary)
+                            .frame(width: 36, alignment: .trailing)
+                    }
+                }
+            } header: {
+                Text(model.t("settings.tabs.layout"))
+            }
+        }
+        .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
+    }
+
+    private var languageTab: some View {
+        Form {
+            Section {
+                Picker(selection: $draft.language) {
+                    ForEach(model.supportedLanguages()) { lang in
+                        Text(languageLabel(lang)).tag(lang)
+                    }
+                } label: {
+                    Label(model.t("settings.language"), systemImage: "character.bubble")
+                }
+
+                Text(model.t("settings.languageHint"))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            } header: {
+                Text(model.t("settings.tabs.language"))
+            }
+        }
+        .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
+    }
+
+    private var aiTab: some View {
+        Form {
+            Section {
+                VStack(spacing: 12) {
+                    SettingsFieldRow(title: "Base URL", labelWidth: fieldLabelWidth) {
+                        TextField("", text: $draft.aiApiBaseUrl)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(height: fieldHeight)
+                    }
+
+                    SettingsFieldRow(title: "Model", labelWidth: fieldLabelWidth) {
+                        TextField("", text: $draft.aiApiModel)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(height: fieldHeight)
+                    }
+
+                    SettingsFieldRow(title: "API Key", labelWidth: fieldLabelWidth) {
+                        SecureField("", text: $draft.aiApiKey)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(height: fieldHeight)
+                    }
+                }
+
+                Button(role: .destructive) {
+                    showClearKeyAlert = true
+                } label: {
+                    Label(model.t("settings.clearKey"), systemImage: "key.slash")
+                }
+                .buttonStyle(.borderless)
+            } header: {
+                Text("API")
+            }
+
+            Section {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(model.t("settings.summaryPromptTemplate"))
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+
+                    TextEditor(text: $draft.summaryPromptTemplate)
+                        .font(.system(size: 12, design: .monospaced))
+                        .frame(height: 120)
+                        .padding(6)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(Color(NSColor.textBackgroundColor))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6)
+                                .strokeBorder(Color(NSColor.separatorColor), lineWidth: 1)
+                        )
+
+                    HStack {
+                        Text(model.t("settings.summaryPromptHint"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button(model.t("settings.resetToDefault")) {
+                            draft.summaryPromptTemplate = ""
+                        }
+                        .buttonStyle(.borderless)
+                        .font(.caption)
+                    }
+                }
+            } header: {
+                Text("Prompt")
+            }
+        }
+        .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
+    }
+
+    private var advancedTab: some View {
+        Form {
+            Section {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text(model.t("settings.resetNavContent"))
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+
+                    Button(role: .destructive) {
+                        showResetAlert = true
+                    } label: {
+                        Label(model.t("settings.resetNavButton"), systemImage: "arrow.counterclockwise")
+                    }
+                    .buttonStyle(.bordered)
+                }
+            } header: {
+                Text(model.t("settings.tabs.advanced"))
+            }
+        }
+        .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
+    }
+
+    private func syncDraft() {
+        draft.theme = model.config.theme
+        draft.sidebarExpanded = model.config.sidebarWidth > minSidebarWidth
+        draft.sidebarWidth = model.config.sidebarWidth > minSidebarWidth ? model.config.sidebarWidth : model.sidebarExpandedWidth
+        draft.language = SupportedLanguage.fromConfig(model.config.language)
+        draft.aiApiBaseUrl = model.config.aiApiBaseUrl
+        draft.aiApiModel = model.config.aiApiModel
+        draft.aiApiKey = ""
+        draft.summaryPromptTemplate = model.config.summaryPromptTemplate
+        draft.clearApiKey = false
+    }
+
+    private var isDirty: Bool {
+        let nextWidth = draft.sidebarExpanded ? max(minSidebarWidth, draft.sidebarWidth) : minSidebarWidth
+        return draft.theme != model.config.theme ||
+            draft.language.rawValue != model.config.language ||
+            nextWidth != model.config.sidebarWidth ||
+            draft.aiApiBaseUrl.trimmingCharacters(in: .whitespacesAndNewlines) != model.config.aiApiBaseUrl ||
+            draft.aiApiModel.trimmingCharacters(in: .whitespacesAndNewlines) != model.config.aiApiModel ||
+            draft.summaryPromptTemplate.trimmingCharacters(in: .whitespacesAndNewlines) != model.config.summaryPromptTemplate.trimmingCharacters(in: .whitespacesAndNewlines) ||
+            !draft.aiApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+            draft.clearApiKey
+    }
+
+    private func save() {
+        model.setTheme(draft.theme)
+
+        let width = draft.sidebarExpanded ? max(minSidebarWidth, draft.sidebarWidth) : minSidebarWidth
+        model.updateSidebarWidth(width)
+
+        model.setLanguage(draft.language)
+        model.updateAiSettings(
+            baseUrl: draft.aiApiBaseUrl.trimmingCharacters(in: .whitespacesAndNewlines),
+            model: draft.aiApiModel.trimmingCharacters(in: .whitespacesAndNewlines),
+            apiKey: draft.aiApiKey,
+            clearKey: draft.clearApiKey
+        )
+        model.updateSummaryPromptTemplate(draft.summaryPromptTemplate)
+        syncDraft()
+        isPresented = false
+    }
+
+    private func languageLabel(_ language: SupportedLanguage) -> String {
+        switch language {
+        case .zhCN:
+            return "中文"
+        case .en:
+            return "English"
+        case .ja:
+            return "日本語"
+        case .ko:
+            return "한국어"
+        case .es:
+            return "Español"
+        case .fr:
+            return "Français"
+        }
+    }
+}
+
+private struct SettingsFieldRow<Content: View>: View {
+    let title: String
+    let labelWidth: CGFloat
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Text(title)
+                .frame(width: labelWidth, alignment: .trailing)
+                .foregroundStyle(.secondary)
+            content()
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+private struct SettingsDraft {
+    var theme = "dark"
+    var sidebarExpanded = true
+    var sidebarWidth: Double = 180
+    var language: SupportedLanguage = .zhCN
+    var aiApiBaseUrl = ""
+    var aiApiModel = ""
+    var aiApiKey = ""
+    var summaryPromptTemplate = ""
+    var clearApiKey = false
+}

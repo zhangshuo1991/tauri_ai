@@ -23,3 +23,10 @@ dist-ssr
 *.sln
 *.sw?
 openspec/*
+.augment/*
+**/.build/*
+**/.swiftpm/*
+**/.xcodebuild/*
+**/.xcodebuild_app/*
+*.dmg
+.claude/*
