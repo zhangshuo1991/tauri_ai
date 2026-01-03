@@ -19,12 +19,14 @@ struct ContentView: View {
     @State private var isHoveringTopBar = false
     @State private var isHoveringTopBarReveal = false
     @State private var topBarHideWorkItem: DispatchWorkItem?
+    @State private var showHome = false
 
     private let topBarRevealHeight: CGFloat = 6
     private let topBarHideDelay: TimeInterval = 1.2
 
     var body: some View {
         let overlayOpen = showSettings || showAddSite || showSiteSettings || showSavedConversation
+        let homeVisible = showHome || model.currentSiteId.isEmpty
 
         ZStack(alignment: .top) {
             HStack(spacing: 0) {
@@ -38,6 +40,7 @@ struct ContentView: View {
                         showSiteSettings = true
                     },
                     onSwitchSite: { siteId in
+                        showHome = false
                         model.switchView(siteId)
                     },
                     onTogglePin: { siteId, pinned in
@@ -47,24 +50,7 @@ struct ContentView: View {
                         model.refreshSite(siteId)
                     },
                     onOpenSavedConversation: { preview in
-                        isLoadingSavedConversation = true
-                        selectedConversation = nil
-                        showSavedConversation = true
-                        Task {
-                            do {
-                                let loaded = try await model.fetchSavedConversation(id: preview.id)
-                                if let loaded {
-                                    selectedConversation = loaded
-                                } else {
-                                    showSavedConversation = false
-                                    model.errorMessage = model.t("search.loadFailed")
-                                }
-                            } catch {
-                                showSavedConversation = false
-                                model.errorMessage = errorText(error)
-                            }
-                            isLoadingSavedConversation = false
-                        }
+                        openSavedConversation(preview)
                     },
                     onClearCache: { siteId in
                         Task { await model.clearCache(for: siteId) }
@@ -92,17 +78,21 @@ struct ContentView: View {
                             }
 
                         if showTopBar {
-                            TopBarView(
-                                webViewManager: model.webViewManager,
-                                onSaveConversation: {
-                                    Task { await model.saveCurrentConversation() }
-                                },
-                                onSwitchTab: { tabId in
-                                    model.switchToTab(tabId)
-                                },
-                                onCloseTab: { tabId in
-                                    model.closeTab(tabId)
-                                },
+                    TopBarView(
+                        webViewManager: model.webViewManager,
+                        onShowHome: {
+                            showHome = true
+                        },
+                        onSaveConversation: {
+                            Task { await model.saveCurrentConversation() }
+                        },
+                        onSwitchTab: { tabId in
+                            showHome = false
+                            model.switchToTab(tabId)
+                        },
+                        onCloseTab: { tabId in
+                            model.closeTab(tabId)
+                        },
                                 onToggleSplit: { enabled in
                                     do {
                                         try model.setSplitEnabled(enabled)
@@ -140,7 +130,7 @@ struct ContentView: View {
                     .animation(.easeInOut(duration: 0.18), value: showTopBar)
 
                     ZStack(alignment: .top) {
-                        if model.loading {
+                        if model.loading && !homeVisible {
                             ProgressView()
                                 .progressViewStyle(LinearProgressViewStyle())
                                 .frame(maxWidth: .infinity)
@@ -148,8 +138,15 @@ struct ContentView: View {
                                 .padding(.top, 6)
                         }
 
-                        if model.currentSiteId.isEmpty {
-                            WelcomeView()
+                        if homeVisible {
+                            HomeView(
+                                recentConversations: model.recentSavedConversations,
+                                onAddSite: { showAddSite = true },
+                                onOpenSettings: { showSettings = true },
+                                onOpenConversation: { preview in
+                                    openSavedConversation(preview)
+                                }
+                            )
                         } else {
                             webviewArea(opacity: overlayOpen ? 0 : 1)
                         }
@@ -266,6 +263,27 @@ struct ContentView: View {
         topBarHideWorkItem = nil
     }
 
+    private func openSavedConversation(_ preview: SavedConversationPreview) {
+        isLoadingSavedConversation = true
+        selectedConversation = nil
+        showSavedConversation = true
+        Task {
+            do {
+                let loaded = try await model.fetchSavedConversation(id: preview.id)
+                if let loaded {
+                    selectedConversation = loaded
+                } else {
+                    showSavedConversation = false
+                    model.errorMessage = model.t("search.loadFailed")
+                }
+            } catch {
+                showSavedConversation = false
+                model.errorMessage = errorText(error)
+            }
+            isLoadingSavedConversation = false
+        }
+    }
+
     @ViewBuilder
     private func webviewArea(opacity: Double) -> some View {
         if model.layoutMode == .split, let left = model.leftTabId, let right = model.rightTabId {
@@ -333,21 +351,5 @@ private struct SavedConversationLoadingView: View {
         }
         .frame(width: 360, height: 200)
         .padding(20)
-    }
-}
-
-private struct WelcomeView: View {
-    @EnvironmentObject private var model: AppModel
-
-    var body: some View {
-        VStack(spacing: 12) {
-            Text("🚀")
-                .font(.system(size: 40))
-            Text(model.t("app.welcomeTitle"))
-                .font(.title2)
-            Text(model.t("app.welcomeSubtitle"))
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }

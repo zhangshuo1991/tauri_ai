@@ -111,6 +111,8 @@ final class Storage: @unchecked Sendable {
             theme: "dark",
             sidebarWidth: 64,
             sidebarExpandedWidth: 180,
+            sidebarIconSize: 28,
+            sidebarTextSize: 15,
             language: "zh-CN",
             summaryPromptTemplate: Storage.defaultSummaryPromptTemplate(),
             aiApiBaseUrl: "https://api.openai.com/v1",

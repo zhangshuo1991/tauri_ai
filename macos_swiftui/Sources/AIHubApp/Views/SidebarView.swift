@@ -34,6 +34,10 @@ struct SidebarView: View {
         let recentSet = Set(recentShown.map { $0.id })
         let unpinned = model.unpinnedSites(excluding: showRecent ? recentSet : []).filter { matches($0, query: query) }
         let showSaved = !query.isEmpty && !savedResults.isEmpty
+        let iconSize = CGFloat(model.config.sidebarIconSize)
+        let textSize = CGFloat(model.config.sidebarTextSize)
+        let iconCornerRadius = max(6, iconSize * 0.25)
+        let snippetSize = max(10, textSize - 3)
 
         VStack(spacing: 0) {
             // Header
@@ -72,7 +76,14 @@ struct SidebarView: View {
                     if showRecent {
                         SidebarSection(title: model.t("sidebar.sectionRecent"), isCompact: isCompact) {
                             ForEach(recentShown, id: \.id) { site in
-                                SidebarRow(site: site, isActive: model.currentSiteId == site.id, isCompact: isCompact)
+                                SidebarRow(
+                                    site: site,
+                                    isActive: model.currentSiteId == site.id,
+                                    isCompact: isCompact,
+                                    iconSize: iconSize,
+                                    textSize: textSize,
+                                    iconCornerRadius: iconCornerRadius
+                                )
                                     .contextMenu { contextMenu(for: site) }
                                     .onTapGesture { onSwitchSite(site.id) }
                             }
@@ -82,7 +93,13 @@ struct SidebarView: View {
                     if showSaved {
                         SidebarSection(title: model.t("sidebar.sectionSaved"), isCompact: isCompact) {
                             ForEach(savedResults, id: \.id) { item in
-                                SavedConversationRow(item: item, isCompact: isCompact)
+                                SavedConversationRow(
+                                    item: item,
+                                    isCompact: isCompact,
+                                    iconSize: iconSize,
+                                    textSize: textSize,
+                                    snippetSize: snippetSize
+                                )
                                     .onTapGesture { onOpenSavedConversation(item) }
                             }
                         }
@@ -90,7 +107,14 @@ struct SidebarView: View {
 
                     SidebarSection(title: "", isCompact: isCompact) {
                         ForEach(pinned, id: \.id) { site in
-                            SidebarRow(site: site, isActive: model.currentSiteId == site.id, isCompact: isCompact)
+                            SidebarRow(
+                                site: site,
+                                isActive: model.currentSiteId == site.id,
+                                isCompact: isCompact,
+                                iconSize: iconSize,
+                                textSize: textSize,
+                                iconCornerRadius: iconCornerRadius
+                            )
                                 .contextMenu { contextMenu(for: site) }
                                 .onTapGesture { onSwitchSite(site.id) }
                         }
@@ -98,11 +122,18 @@ struct SidebarView: View {
 
                     if !unpinned.isEmpty {
                         SidebarSection(title: "", isCompact: isCompact) {
-                            ForEach(unpinned, id: \.id) { site in
-                                SidebarRow(site: site, isActive: model.currentSiteId == site.id, isCompact: isCompact)
-                                    .contextMenu { contextMenu(for: site) }
-                                    .onTapGesture { onSwitchSite(site.id) }
-                            }
+                        ForEach(unpinned, id: \.id) { site in
+                            SidebarRow(
+                                site: site,
+                                isActive: model.currentSiteId == site.id,
+                                isCompact: isCompact,
+                                iconSize: iconSize,
+                                textSize: textSize,
+                                iconCornerRadius: iconCornerRadius
+                            )
+                                .contextMenu { contextMenu(for: site) }
+                                .onTapGesture { onSwitchSite(site.id) }
+                        }
                         }
                     }
                 }
@@ -213,12 +244,15 @@ private struct SidebarRow: View {
     let site: AiSite
     let isActive: Bool
     let isCompact: Bool
+    let iconSize: CGFloat
+    let textSize: CGFloat
+    let iconCornerRadius: CGFloat
     @State private var isHovering = false
 
     var body: some View {
         if isCompact {
             // Compact mode: icon only, centered
-            SiteIconView(iconKey: site.icon, siteId: site.id, size: 32, cornerRadius: 8)
+            SiteIconView(iconKey: site.icon, siteId: site.id, size: iconSize, cornerRadius: iconCornerRadius)
                 .foregroundColor(isActive ? .accentColor : .secondary)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 10)
@@ -234,10 +268,10 @@ private struct SidebarRow: View {
         } else {
             // Expanded mode: icon + name
             HStack(spacing: 12) {
-                SiteIconView(iconKey: site.icon, siteId: site.id, size: 32, cornerRadius: 8)
+                SiteIconView(iconKey: site.icon, siteId: site.id, size: iconSize, cornerRadius: iconCornerRadius)
                     .foregroundColor(isActive ? .accentColor : .primary.opacity(0.7))
                 Text(site.name)
-                    .font(.system(size: 14, weight: isActive ? .medium : .regular))
+                    .font(.system(size: textSize, weight: isActive ? .medium : .regular))
                     .foregroundColor(isActive ? .primary : .primary.opacity(0.85))
                     .lineLimit(1)
                 Spacer()
@@ -270,14 +304,19 @@ private struct SidebarRow: View {
 private struct SavedConversationRow: View {
     let item: SavedConversationPreview
     let isCompact: Bool
+    let iconSize: CGFloat
+    let textSize: CGFloat
+    let snippetSize: CGFloat
     @State private var isHovering = false
 
     var body: some View {
         if isCompact {
             Image(systemName: "doc.text")
-                .font(.system(size: 14))
+                .resizable()
+                .scaledToFit()
                 .foregroundColor(.secondary)
-                .frame(width: 28, height: 28)
+                .frame(width: iconSize * 0.6, height: iconSize * 0.6)
+                .frame(width: iconSize, height: iconSize)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 10)
                 .background(
@@ -291,15 +330,18 @@ private struct SavedConversationRow: View {
         } else {
             HStack(spacing: 10) {
                 Image(systemName: "doc.text")
+                    .resizable()
+                    .scaledToFit()
                     .foregroundColor(.secondary)
-                    .frame(width: 20)
+                    .frame(width: iconSize * 0.6, height: iconSize * 0.6)
+                    .frame(width: iconSize, height: iconSize)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(item.siteName)
-                        .font(.system(size: 13, weight: .medium))
+                        .font(.system(size: textSize, weight: .medium))
                         .foregroundColor(.primary)
                         .lineLimit(1)
                     Text(item.snippet.isEmpty ? "-" : item.snippet)
-                        .font(.system(size: 11))
+                        .font(.system(size: snippetSize))
                         .foregroundColor(.secondary)
                         .lineLimit(1)
                 }

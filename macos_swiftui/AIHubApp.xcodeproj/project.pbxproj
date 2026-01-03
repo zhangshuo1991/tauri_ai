@@ -14,6 +14,7 @@
 		F00000000000000000000205 /* WebViewManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000105 /* WebViewManager.swift */; };
 		F00000000000000000000206 /* AddSiteView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000106 /* AddSiteView.swift */; };
 		F00000000000000000000207 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000107 /* ContentView.swift */; };
+		F00000000000000000000223 /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000123 /* HomeView.swift */; };
 		F00000000000000000000208 /* IconPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000108 /* IconPickerView.swift */; };
 		F00000000000000000000209 /* ProjectContextView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000109 /* ProjectContextView.swift */; };
 		F0000000000000000000020A /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0000000000000000000010A /* SettingsView.swift */; };
@@ -40,6 +41,7 @@
 		F00000000000000000000105 /* WebViewManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebViewManager.swift; sourceTree = "<group>"; };
 		F00000000000000000000106 /* AddSiteView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AddSiteView.swift; sourceTree = "<group>"; };
 		F00000000000000000000107 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		F00000000000000000000123 /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
 		F00000000000000000000108 /* IconPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IconPickerView.swift; sourceTree = "<group>"; };
 		F00000000000000000000109 /* ProjectContextView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectContextView.swift; sourceTree = "<group>"; };
 		F0000000000000000000010A /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
@@ -103,6 +105,7 @@
 			children = (
 				F00000000000000000000106 /* AddSiteView.swift */,
 				F00000000000000000000107 /* ContentView.swift */,
+				F00000000000000000000123 /* HomeView.swift */,
 				F00000000000000000000108 /* IconPickerView.swift */,
 				F00000000000000000000109 /* ProjectContextView.swift */,
 				F0000000000000000000010A /* SettingsView.swift */,
@@ -221,6 +224,7 @@
 				F00000000000000000000205 /* WebViewManager.swift in Sources */,
 				F00000000000000000000206 /* AddSiteView.swift in Sources */,
 				F00000000000000000000207 /* ContentView.swift in Sources */,
+				F00000000000000000000223 /* HomeView.swift in Sources */,
 				F00000000000000000000208 /* IconPickerView.swift in Sources */,
 				F00000000000000000000209 /* ProjectContextView.swift in Sources */,
 				F0000000000000000000020A /* SettingsView.swift in Sources */,

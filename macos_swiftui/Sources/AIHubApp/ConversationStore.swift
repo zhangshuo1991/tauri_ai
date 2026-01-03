@@ -165,6 +165,42 @@ final class ConversationStore: @unchecked Sendable {
         }
     }
 
+    func listRecent(limit: Int) async throws -> [SavedConversationPreview] {
+        let capped = min(max(1, limit), maxResults)
+        return try await withCheckedThrowingContinuation { continuation in
+            queue.async {
+                do {
+                    guard let db = self.db else {
+                        throw ConversationStoreError(message: "Database not available")
+                    }
+
+                    let sql = """
+                    SELECT id, site_name, url, substr(content, 1, 200) AS snippet, created_at
+                    FROM conversations
+                    ORDER BY created_at DESC
+                    LIMIT ?;
+                    """
+                    var statement: OpaquePointer?
+                    guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+                        throw ConversationStoreError(message: "Failed to prepare recent list")
+                    }
+                    defer { sqlite3_finalize(statement) }
+                    sqlite3_bind_int(statement, 1, Int32(capped))
+
+                    var results: [SavedConversationPreview] = []
+                    while sqlite3_step(statement) == SQLITE_ROW {
+                        if let preview = self.readPreviewRow(statement: statement) {
+                            results.append(preview)
+                        }
+                    }
+                    continuation.resume(returning: results)
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
     func fetchConversation(id: Int64) async throws -> SavedConversation? {
         try await withCheckedThrowingContinuation { continuation in
             queue.async {

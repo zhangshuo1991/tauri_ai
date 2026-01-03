@@ -24,6 +24,7 @@ final class AppModel: ObservableObject {
     @Published var toastMessage: String?
     @Published var loading = false
     @Published var savedSearchResults: [SavedConversationPreview] = []
+    @Published private(set) var recentSavedConversations: [SavedConversationPreview] = []
 
     let webViewManager = WebViewManager()
 
@@ -66,6 +67,8 @@ final class AppModel: ObservableObject {
                 self?.webViewManager.setError(message: nil)
             }
             .store(in: &cancellables)
+
+        Task { await loadRecentSavedConversations() }
     }
 
     func t(_ key: String) -> String {
@@ -95,6 +98,13 @@ final class AppModel: ObservableObject {
             if safeWidth > 64 {
                 $0.sidebarExpandedWidth = safeWidth
             }
+        }
+    }
+
+    func updateSidebarItemSizes(iconSize: Double, textSize: Double) {
+        updateConfig {
+            $0.sidebarIconSize = min(30, max(15, iconSize))
+            $0.sidebarTextSize = min(30, max(15, textSize))
         }
     }
 
@@ -571,6 +581,14 @@ final class AppModel: ObservableObject {
         if sanitized.sidebarWidth > 64 && sanitized.sidebarExpandedWidth <= 64 {
             sanitized.sidebarExpandedWidth = sanitized.sidebarWidth
         }
+        let iconSize = min(30, max(15, sanitized.sidebarIconSize))
+        if sanitized.sidebarIconSize != iconSize {
+            sanitized.sidebarIconSize = iconSize
+        }
+        let textSize = min(30, max(15, sanitized.sidebarTextSize))
+        if sanitized.sidebarTextSize != textSize {
+            sanitized.sidebarTextSize = textSize
+        }
         if sanitized.aiApiBaseUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             sanitized.aiApiBaseUrl = "https://api.openai.com/v1"
         }
@@ -691,6 +709,7 @@ final class AppModel: ObservableObject {
                 createdAt: createdAt,
                 embedding: embedding
             )
+            await loadRecentSavedConversations()
             toastMessage = t("search.saveSuccess")
         } catch {
             errorMessage = errorText(error)
@@ -727,6 +746,14 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func loadRecentSavedConversations() async {
+        do {
+            recentSavedConversations = try await conversationStore.listRecent(limit: 6)
+        } catch {
+            errorMessage = errorText(error)
+        }
+    }
+
     func fetchSavedConversation(id: Int64) async throws -> SavedConversation? {
         try await conversationStore.fetchConversation(id: id)
     }
@@ -734,6 +761,7 @@ final class AppModel: ObservableObject {
     func clearSavedHistory() async throws {
         try await conversationStore.clearHistory()
         savedSearchResults = []
+        recentSavedConversations = []
     }
 
     private func summarizeText(_ text: String, siteId: String?) async throws -> String {

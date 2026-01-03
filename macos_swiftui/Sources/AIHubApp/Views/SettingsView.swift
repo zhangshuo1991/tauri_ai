@@ -144,6 +144,28 @@ struct SettingsView: View {
                             .frame(width: 36, alignment: .trailing)
                     }
                 }
+
+                HStack {
+                    Label(model.t("settings.sidebarIconSize"), systemImage: "square.grid.2x2")
+                    Spacer()
+                    Slider(value: $draft.sidebarIconSize, in: 15...30, step: 1)
+                        .frame(width: 160)
+                    Text(String(format: "%.0f", draft.sidebarIconSize))
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundColor(.secondary)
+                        .frame(width: 36, alignment: .trailing)
+                }
+
+                HStack {
+                    Label(model.t("settings.sidebarTextSize"), systemImage: "textformat.size")
+                    Spacer()
+                    Slider(value: $draft.sidebarTextSize, in: 15...30, step: 1)
+                        .frame(width: 160)
+                    Text(String(format: "%.0f", draft.sidebarTextSize))
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundColor(.secondary)
+                        .frame(width: 36, alignment: .trailing)
+                }
             } header: {
                 Text(model.t("settings.tabs.layout"))
             }
@@ -308,6 +330,8 @@ struct SettingsView: View {
         draft.theme = model.config.theme
         draft.sidebarExpanded = model.config.sidebarWidth > minSidebarWidth
         draft.sidebarWidth = model.config.sidebarWidth > minSidebarWidth ? model.config.sidebarWidth : model.sidebarExpandedWidth
+        draft.sidebarIconSize = model.config.sidebarIconSize
+        draft.sidebarTextSize = model.config.sidebarTextSize
         draft.language = SupportedLanguage.fromConfig(model.config.language)
         draft.aiApiBaseUrl = model.config.aiApiBaseUrl
         draft.aiApiModel = model.config.aiApiModel
@@ -323,6 +347,8 @@ struct SettingsView: View {
         return draft.theme != model.config.theme ||
             draft.language.rawValue != model.config.language ||
             nextWidth != model.config.sidebarWidth ||
+            draft.sidebarIconSize != model.config.sidebarIconSize ||
+            draft.sidebarTextSize != model.config.sidebarTextSize ||
             draft.aiApiBaseUrl.trimmingCharacters(in: .whitespacesAndNewlines) != model.config.aiApiBaseUrl ||
             draft.aiApiModel.trimmingCharacters(in: .whitespacesAndNewlines) != model.config.aiApiModel ||
             draft.aiEmbeddingModel.trimmingCharacters(in: .whitespacesAndNewlines) != model.config.aiEmbeddingModel ||
@@ -337,6 +363,7 @@ struct SettingsView: View {
 
         let width = draft.sidebarExpanded ? max(minSidebarWidth, draft.sidebarWidth) : minSidebarWidth
         model.updateSidebarWidth(width)
+        model.updateSidebarItemSizes(iconSize: draft.sidebarIconSize, textSize: draft.sidebarTextSize)
 
         model.setLanguage(draft.language)
         model.updateAiSettings(
@@ -394,6 +421,8 @@ private struct SettingsDraft {
     var theme = "dark"
     var sidebarExpanded = true
     var sidebarWidth: Double = 180
+    var sidebarIconSize: Double = 28
+    var sidebarTextSize: Double = 15
     var language: SupportedLanguage = .zhCN
     var aiApiBaseUrl = ""
     var aiApiModel = ""

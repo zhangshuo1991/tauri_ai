@@ -5,6 +5,7 @@ struct TopBarView: View {
 
     @ObservedObject var webViewManager: WebViewManager
 
+    let onShowHome: () -> Void
     let onSaveConversation: () -> Void
     let onSwitchTab: (String) -> Void
     let onCloseTab: (String) -> Void
@@ -19,6 +20,13 @@ struct TopBarView: View {
             HStack(spacing: 8) {
                 // Action Buttons Group
                 HStack(spacing: 4) {
+                    Button(action: onShowHome) {
+                        Label(model.t("top.home"), systemImage: "house")
+                    }
+                    .buttonStyle(ToolbarButtonStyle())
+
+                    ToolbarDivider()
+
                     Button(action: onSaveConversation) {
                         Label(model.t("top.save"), systemImage: "tray.and.arrow.down")
                     }
