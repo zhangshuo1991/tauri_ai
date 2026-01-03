@@ -5,12 +5,14 @@ struct SidebarView: View {
 
     @Binding var searchQuery: String
 
+    let savedResults: [SavedConversationPreview]
     let showSettings: () -> Void
     let showAddSite: () -> Void
     let showSiteSettings: (AiSite) -> Void
     let onSwitchSite: (String) -> Void
     let onTogglePin: (String, Bool) -> Void
     let onRefreshSite: (String) -> Void
+    let onOpenSavedConversation: (SavedConversationPreview) -> Void
     let onClearCache: (String) -> Void
     let onRemoveSite: (String) -> Void
     let onMovePinned: (IndexSet, Int) -> Void
@@ -31,6 +33,7 @@ struct SidebarView: View {
         let recentShown = Array(recents.prefix(5))
         let recentSet = Set(recentShown.map { $0.id })
         let unpinned = model.unpinnedSites(excluding: showRecent ? recentSet : []).filter { matches($0, query: query) }
+        let showSaved = !query.isEmpty && !savedResults.isEmpty
 
         VStack(spacing: 0) {
             // Header
@@ -72,6 +75,15 @@ struct SidebarView: View {
                                 SidebarRow(site: site, isActive: model.currentSiteId == site.id, isCompact: isCompact)
                                     .contextMenu { contextMenu(for: site) }
                                     .onTapGesture { onSwitchSite(site.id) }
+                            }
+                        }
+                    }
+
+                    if showSaved {
+                        SidebarSection(title: model.t("sidebar.sectionSaved"), isCompact: isCompact) {
+                            ForEach(savedResults, id: \.id) { item in
+                                SavedConversationRow(item: item, isCompact: isCompact)
+                                    .onTapGesture { onOpenSavedConversation(item) }
                             }
                         }
                     }
@@ -134,6 +146,7 @@ struct SidebarView: View {
                     .buttonStyle(SidebarActionButtonStyle())
                 }
             }
+            .labelStyle(SidebarLabelStyle())
             .padding(.horizontal, isCompact ? 6 : 8)
             .padding(.vertical, 10)
         }
@@ -250,6 +263,59 @@ private struct SidebarRow: View {
             return Color.primary.opacity(0.05)
         }
         return .clear
+    }
+}
+
+// MARK: - Saved Conversation Row
+private struct SavedConversationRow: View {
+    let item: SavedConversationPreview
+    let isCompact: Bool
+    @State private var isHovering = false
+
+    var body: some View {
+        if isCompact {
+            Image(systemName: "doc.text")
+                .font(.system(size: 14))
+                .foregroundColor(.secondary)
+                .frame(width: 28, height: 28)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
+                .background(
+                    RoundedRectangle(cornerRadius: 10)
+                        .fill(isHovering ? Color.primary.opacity(0.05) : Color.clear)
+                )
+                .onHover { hovering in
+                    isHovering = hovering
+                }
+                .help(item.siteName)
+        } else {
+            HStack(spacing: 10) {
+                Image(systemName: "doc.text")
+                    .foregroundColor(.secondary)
+                    .frame(width: 20)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(item.siteName)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(.primary)
+                        .lineLimit(1)
+                    Text(item.snippet.isEmpty ? "-" : item.snippet)
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer()
+            }
+            .padding(.vertical, 8)
+            .padding(.horizontal, 12)
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(isHovering ? Color.primary.opacity(0.05) : Color.clear)
+            )
+            .contentShape(Rectangle())
+            .onHover { hovering in
+                isHovering = hovering
+            }
+        }
     }
 }
 

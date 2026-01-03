@@ -8,6 +8,8 @@ struct SettingsView: View {
     @State private var draft = SettingsDraft()
     @State private var showClearKeyAlert = false
     @State private var showResetAlert = false
+    @State private var showClearHistoryAlert = false
+    @State private var showClearHistoryDone = false
 
     private let minSidebarWidth: Double = 64
     private let fieldLabelWidth: CGFloat = 90
@@ -85,6 +87,24 @@ struct SettingsView: View {
             Button(model.t("settings.cancel"), role: .cancel) {}
         } message: {
             Text(model.t("settings.resetNavContent"))
+        }
+        .alert(model.t("settings.clearHistoryTitle"), isPresented: $showClearHistoryAlert) {
+            Button(model.t("settings.clearHistoryConfirm"), role: .destructive) {
+                Task {
+                    do {
+                        try await model.clearSavedHistory()
+                        showClearHistoryDone = true
+                    } catch {
+                        model.errorMessage = errorText(error)
+                    }
+                }
+            }
+            Button(model.t("settings.cancel"), role: .cancel) {}
+        } message: {
+            Text(model.t("settings.clearHistoryContent"))
+        }
+        .alert(model.t("settings.clearHistorySuccess"), isPresented: $showClearHistoryDone) {
+            Button(model.t("common.close"), role: .cancel) {}
         }
     }
 
@@ -175,6 +195,24 @@ struct SettingsView: View {
                             .textFieldStyle(.roundedBorder)
                             .frame(height: fieldHeight)
                     }
+
+                    SettingsFieldRow(title: model.t("settings.embeddingModel"), labelWidth: fieldLabelWidth) {
+                        TextField("", text: $draft.aiEmbeddingModel)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(height: fieldHeight)
+                    }
+
+                    SettingsFieldRow(title: model.t("settings.searchMode"), labelWidth: fieldLabelWidth) {
+                        Picker(selection: $draft.searchMode) {
+                            Text(model.t("settings.searchMode.keyword")).tag(SearchMode.keyword.rawValue)
+                            Text(model.t("settings.searchMode.semanticOffline")).tag(SearchMode.semanticOffline.rawValue)
+                            Text(model.t("settings.searchMode.semanticOnline")).tag(SearchMode.semanticOnline.rawValue)
+                        } label: {
+                            Text("")
+                        }
+                        .pickerStyle(.menu)
+                        .frame(height: fieldHeight)
+                    }
                 }
 
                 Button(role: .destructive) {
@@ -244,6 +282,23 @@ struct SettingsView: View {
             } header: {
                 Text(model.t("settings.tabs.advanced"))
             }
+
+            Section {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text(model.t("settings.clearHistoryContent"))
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+
+                    Button(role: .destructive) {
+                        showClearHistoryAlert = true
+                    } label: {
+                        Label(model.t("settings.clearHistoryButton"), systemImage: "trash")
+                    }
+                    .buttonStyle(.bordered)
+                }
+            } header: {
+                Text(model.t("settings.clearHistoryTitle"))
+            }
         }
         .formStyle(.grouped)
         .scrollContentBackground(.hidden)
@@ -257,6 +312,8 @@ struct SettingsView: View {
         draft.aiApiBaseUrl = model.config.aiApiBaseUrl
         draft.aiApiModel = model.config.aiApiModel
         draft.aiApiKey = ""
+        draft.aiEmbeddingModel = model.config.aiEmbeddingModel
+        draft.searchMode = model.config.searchMode
         draft.summaryPromptTemplate = model.config.summaryPromptTemplate
         draft.clearApiKey = false
     }
@@ -268,6 +325,8 @@ struct SettingsView: View {
             nextWidth != model.config.sidebarWidth ||
             draft.aiApiBaseUrl.trimmingCharacters(in: .whitespacesAndNewlines) != model.config.aiApiBaseUrl ||
             draft.aiApiModel.trimmingCharacters(in: .whitespacesAndNewlines) != model.config.aiApiModel ||
+            draft.aiEmbeddingModel.trimmingCharacters(in: .whitespacesAndNewlines) != model.config.aiEmbeddingModel ||
+            draft.searchMode != model.config.searchMode ||
             draft.summaryPromptTemplate.trimmingCharacters(in: .whitespacesAndNewlines) != model.config.summaryPromptTemplate.trimmingCharacters(in: .whitespacesAndNewlines) ||
             !draft.aiApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
             draft.clearApiKey
@@ -284,8 +343,10 @@ struct SettingsView: View {
             baseUrl: draft.aiApiBaseUrl.trimmingCharacters(in: .whitespacesAndNewlines),
             model: draft.aiApiModel.trimmingCharacters(in: .whitespacesAndNewlines),
             apiKey: draft.aiApiKey,
-            clearKey: draft.clearApiKey
+            clearKey: draft.clearApiKey,
+            embeddingModel: draft.aiEmbeddingModel.trimmingCharacters(in: .whitespacesAndNewlines)
         )
+        model.updateSearchMode(SearchMode(rawValue: draft.searchMode) ?? .keyword)
         model.updateSummaryPromptTemplate(draft.summaryPromptTemplate)
         syncDraft()
         isPresented = false
@@ -306,6 +367,10 @@ struct SettingsView: View {
         case .fr:
             return "Français"
         }
+    }
+
+    private func errorText(_ error: Error) -> String {
+        (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
     }
 }
 
@@ -333,6 +398,8 @@ private struct SettingsDraft {
     var aiApiBaseUrl = ""
     var aiApiModel = ""
     var aiApiKey = ""
+    var aiEmbeddingModel = ""
+    var searchMode = SearchMode.keyword.rawValue
     var summaryPromptTemplate = ""
     var clearApiKey = false
 }

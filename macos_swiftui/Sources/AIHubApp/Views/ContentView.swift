@@ -7,11 +7,14 @@ struct ContentView: View {
     @State private var showSettings = false
     @State private var showAddSite = false
     @State private var showSiteSettings = false
-    @State private var showSummary = false
-    @State private var showProjects = false
-    @State private var summaryText = ""
+    @State private var showSavedConversation = false
+    @State private var isLoadingSavedConversation = false
+    @State private var toastMessage: String?
+    @State private var showToast = false
+    @State private var toastHideWorkItem: DispatchWorkItem?
     @State private var siteForSettings: AiSite?
     @State private var alertItem: AlertItem?
+    @State private var selectedConversation: SavedConversation?
     @State private var showTopBar = true
     @State private var isHoveringTopBar = false
     @State private var isHoveringTopBarReveal = false
@@ -21,137 +24,171 @@ struct ContentView: View {
     private let topBarHideDelay: TimeInterval = 1.2
 
     var body: some View {
-        let overlayOpen = showSettings || showAddSite || showSiteSettings || showSummary || showProjects
+        let overlayOpen = showSettings || showAddSite || showSiteSettings || showSavedConversation
 
-        HStack(spacing: 0) {
-            SidebarView(
-                searchQuery: $searchQuery,
-                showSettings: { showSettings = true },
-                showAddSite: { showAddSite = true },
-                showSiteSettings: { site in
-                    siteForSettings = site
-                    showSiteSettings = true
-                },
-                onSwitchSite: { siteId in
-                    model.switchView(siteId)
-                },
-                onTogglePin: { siteId, pinned in
-                    model.togglePin(siteId: siteId, pinned: pinned)
-                },
-                onRefreshSite: { siteId in
-                    model.refreshSite(siteId)
-                },
-                onClearCache: { siteId in
-                    Task { await model.clearCache(for: siteId) }
-                },
-                onRemoveSite: { siteId in
-                    model.removeSite(siteId: siteId)
-                },
-                onMovePinned: { offsets, destination in
-                    model.updatePinnedOrder(fromOffsets: offsets, toOffset: destination)
-                },
-                onMoveUnpinned: { offsets, destination, current in
-                    model.updateSiteOrder(fromOffsets: offsets, toOffset: destination, currentUnpinned: current)
-                }
-            )
-            .frame(width: model.sidebarWidth)
-
-            VStack(spacing: 0) {
-                ZStack(alignment: .top) {
-                    Color.clear
-                        .frame(height: topBarRevealHeight)
-                        .contentShape(Rectangle())
-                        .onHover { hovering in
-                            isHoveringTopBarReveal = hovering
-                            updateTopBarVisibility()
+        ZStack(alignment: .top) {
+            HStack(spacing: 0) {
+                SidebarView(
+                    searchQuery: $searchQuery,
+                    savedResults: model.savedSearchResults,
+                    showSettings: { showSettings = true },
+                    showAddSite: { showAddSite = true },
+                    showSiteSettings: { site in
+                        siteForSettings = site
+                        showSiteSettings = true
+                    },
+                    onSwitchSite: { siteId in
+                        model.switchView(siteId)
+                    },
+                    onTogglePin: { siteId, pinned in
+                        model.togglePin(siteId: siteId, pinned: pinned)
+                    },
+                    onRefreshSite: { siteId in
+                        model.refreshSite(siteId)
+                    },
+                    onOpenSavedConversation: { preview in
+                        isLoadingSavedConversation = true
+                        selectedConversation = nil
+                        showSavedConversation = true
+                        Task {
+                            do {
+                                let loaded = try await model.fetchSavedConversation(id: preview.id)
+                                if let loaded {
+                                    selectedConversation = loaded
+                                } else {
+                                    showSavedConversation = false
+                                    model.errorMessage = model.t("search.loadFailed")
+                                }
+                            } catch {
+                                showSavedConversation = false
+                                model.errorMessage = errorText(error)
+                            }
+                            isLoadingSavedConversation = false
                         }
+                    },
+                    onClearCache: { siteId in
+                        Task { await model.clearCache(for: siteId) }
+                    },
+                    onRemoveSite: { siteId in
+                        model.removeSite(siteId: siteId)
+                    },
+                    onMovePinned: { offsets, destination in
+                        model.updatePinnedOrder(fromOffsets: offsets, toOffset: destination)
+                    },
+                    onMoveUnpinned: { offsets, destination, current in
+                        model.updateSiteOrder(fromOffsets: offsets, toOffset: destination, currentUnpinned: current)
+                    }
+                )
+                .frame(width: model.sidebarWidth)
 
-                    if showTopBar {
-                        TopBarView(
-                            webViewManager: model.webViewManager,
-                            showProjects: { showProjects = true },
-                            onCreateTab: {
-                                guard !model.currentSiteId.isEmpty else { return }
-                                model.createTab(for: model.currentSiteId)
-                            },
-                            onSummarize: {
-                                Task {
+                VStack(spacing: 0) {
+                    ZStack(alignment: .top) {
+                        Color.clear
+                            .frame(height: topBarRevealHeight)
+                            .contentShape(Rectangle())
+                            .onHover { hovering in
+                                isHoveringTopBarReveal = hovering
+                                updateTopBarVisibility()
+                            }
+
+                        if showTopBar {
+                            TopBarView(
+                                webViewManager: model.webViewManager,
+                                onSaveConversation: {
+                                    Task { await model.saveCurrentConversation() }
+                                },
+                                onSwitchTab: { tabId in
+                                    model.switchToTab(tabId)
+                                },
+                                onCloseTab: { tabId in
+                                    model.closeTab(tabId)
+                                },
+                                onToggleSplit: { enabled in
                                     do {
-                                        let summary = try await model.summarizeActiveTab()
-                                        summaryText = summary
-                                        showSummary = true
+                                        try model.setSplitEnabled(enabled)
+                                    } catch {
+                                        model.errorMessage = errorText(error)
+                                    }
+                                },
+                                onUpdateSplitRatio: { ratio in
+                                    model.updateSplitRatio(ratio)
+                                },
+                                onUpdateLeftTab: { tabId in
+                                    do {
+                                        try model.updateSplitTabs(left: tabId, right: model.rightTabId)
+                                        model.activeTabId = tabId ?? model.activeTabId
+                                    } catch {
+                                        model.errorMessage = errorText(error)
+                                    }
+                                },
+                                onUpdateRightTab: { tabId in
+                                    do {
+                                        try model.updateSplitTabs(left: model.leftTabId, right: tabId)
+                                        model.activeTabId = tabId ?? model.activeTabId
                                     } catch {
                                         model.errorMessage = errorText(error)
                                     }
                                 }
-                            },
-                            onSwitchTab: { tabId in
-                                model.switchToTab(tabId)
-                            },
-                            onCloseTab: { tabId in
-                                model.closeTab(tabId)
-                            },
-                            onToggleSplit: { enabled in
-                                do {
-                                    try model.setSplitEnabled(enabled)
-                                } catch {
-                                    model.errorMessage = errorText(error)
-                                }
-                            },
-                            onUpdateSplitRatio: { ratio in
-                                model.updateSplitRatio(ratio)
-                            },
-                            onUpdateLeftTab: { tabId in
-                                do {
-                                    try model.updateSplitTabs(left: tabId, right: model.rightTabId)
-                                    model.activeTabId = tabId ?? model.activeTabId
-                                } catch {
-                                    model.errorMessage = errorText(error)
-                                }
-                            },
-                            onUpdateRightTab: { tabId in
-                                do {
-                                    try model.updateSplitTabs(left: model.leftTabId, right: tabId)
-                                    model.activeTabId = tabId ?? model.activeTabId
-                                } catch {
-                                    model.errorMessage = errorText(error)
-                                }
+                            )
+                            .onHover { hovering in
+                                isHoveringTopBar = hovering
+                                updateTopBarVisibility()
                             }
-                        )
-                        .onHover { hovering in
-                            isHoveringTopBar = hovering
-                            updateTopBarVisibility()
+                            .transition(.move(edge: .top).combined(with: .opacity))
                         }
-                        .transition(.move(edge: .top).combined(with: .opacity))
                     }
-                }
-                .animation(.easeInOut(duration: 0.18), value: showTopBar)
+                    .animation(.easeInOut(duration: 0.18), value: showTopBar)
 
-                ZStack(alignment: .top) {
-                    if model.loading {
-                        ProgressView()
-                            .progressViewStyle(LinearProgressViewStyle())
-                            .frame(maxWidth: .infinity)
-                            .padding(.horizontal, 8)
-                            .padding(.top, 6)
-                    }
+                    ZStack(alignment: .top) {
+                        if model.loading {
+                            ProgressView()
+                                .progressViewStyle(LinearProgressViewStyle())
+                                .frame(maxWidth: .infinity)
+                                .padding(.horizontal, 8)
+                                .padding(.top, 6)
+                        }
 
-                    if model.currentSiteId.isEmpty {
-                        WelcomeView()
-                    } else {
-                        webviewArea(opacity: overlayOpen ? 0 : 1)
+                        if model.currentSiteId.isEmpty {
+                            WelcomeView()
+                        } else {
+                            webviewArea(opacity: overlayOpen ? 0 : 1)
+                        }
                     }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+
+            if showToast, let toastMessage {
+                ToastView(message: toastMessage)
+                    .padding(.top, 10)
+                    .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
+        .animation(.easeInOut(duration: 0.2), value: showToast)
         .alert(item: $alertItem) { item in
             Alert(title: Text(item.message))
+        }
+        .onChange(of: searchQuery) { _, newValue in
+            Task { await model.updateSavedSearchResults(query: newValue) }
         }
         .onChange(of: model.errorMessage) { _, newValue in
             guard let message = newValue else { return }
             alertItem = AlertItem(message: message)
             model.errorMessage = nil
+        }
+        .onChange(of: model.toastMessage) { _, newValue in
+            guard let message = newValue else { return }
+            toastMessage = message
+            showToast = true
+            model.toastMessage = nil
+            toastHideWorkItem?.cancel()
+            let workItem = DispatchWorkItem {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    showToast = false
+                }
+            }
+            toastHideWorkItem = workItem
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.6, execute: workItem)
         }
         .sheet(isPresented: $showSettings) {
             SettingsView(isPresented: $showSettings)
@@ -184,13 +221,14 @@ struct ContentView: View {
             }
             .environmentObject(model)
         }
-        .sheet(isPresented: $showSummary) {
-            SummaryView(isPresented: $showSummary, summary: $summaryText)
-                .environmentObject(model)
-        }
-        .sheet(isPresented: $showProjects) {
-            ProjectContextView(isPresented: $showProjects)
-                .environmentObject(model)
+        .sheet(isPresented: $showSavedConversation) {
+            if isLoadingSavedConversation {
+                SavedConversationLoadingView()
+                    .environmentObject(model)
+            } else if let conversation = selectedConversation {
+                SavedConversationView(isPresented: $showSavedConversation, conversation: conversation)
+                    .environmentObject(model)
+            }
         }
     }
 
@@ -264,6 +302,38 @@ struct ContentView: View {
 private struct AlertItem: Identifiable {
     let id = UUID()
     let message: String
+}
+
+private struct ToastView: View {
+    let message: String
+
+    var body: some View {
+        Text(message)
+            .font(.system(size: 12, weight: .medium))
+            .foregroundColor(.primary)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color(NSColor.windowBackgroundColor).opacity(0.95))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .strokeBorder(Color.primary.opacity(0.1), lineWidth: 1)
+            )
+            .shadow(color: Color.black.opacity(0.12), radius: 4, x: 0, y: 2)
+    }
+}
+
+private struct SavedConversationLoadingView: View {
+    var body: some View {
+        VStack(spacing: 12) {
+            ProgressView()
+                .controlSize(.regular)
+        }
+        .frame(width: 360, height: 200)
+        .padding(20)
+    }
 }
 
 private struct WelcomeView: View {

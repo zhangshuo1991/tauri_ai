@@ -71,6 +71,16 @@ struct SidebarActionButtonStyle: ButtonStyle {
     }
 }
 
+struct SidebarLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 10) {
+            configuration.icon
+                .frame(width: 20, alignment: .center)
+            configuration.title
+        }
+    }
+}
+
 struct ToolbarButtonStyle: ButtonStyle {
     @State private var isHovering = false
 

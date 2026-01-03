@@ -20,9 +20,11 @@
 		F0000000000000000000020B /* SidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0000000000000000000010B /* SidebarView.swift */; };
 		F0000000000000000000020C /* SiteSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0000000000000000000010C /* SiteSettingsView.swift */; };
 		F0000000000000000000020D /* SummaryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0000000000000000000010D /* SummaryView.swift */; };
+		F00000000000000000000222 /* SavedConversationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000122 /* SavedConversationView.swift */; };
 		F0000000000000000000020E /* TopBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0000000000000000000010E /* TopBarView.swift */; };
 		F0000000000000000000020F /* WebViewContainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0000000000000000000010F /* WebViewContainer.swift */; };
 		F00000000000000000000211 /* LogoStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000110 /* LogoStore.swift */; };
+		F00000000000000000000218 /* ConversationStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000116 /* ConversationStore.swift */; };
 		F00000000000000000000216 /* ViewStyles.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000115 /* ViewStyles.swift */; };
 		F00000000000000000000220 /* AppIcon.icns in Resources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000120 /* AppIcon.icns */; };
 		F00000000000000000000221 /* site-config.json in Resources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000121 /* site-config.json */; };
@@ -44,9 +46,11 @@
 		F0000000000000000000010B /* SidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarView.swift; sourceTree = "<group>"; };
 		F0000000000000000000010C /* SiteSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SiteSettingsView.swift; sourceTree = "<group>"; };
 		F0000000000000000000010D /* SummaryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SummaryView.swift; sourceTree = "<group>"; };
+		F00000000000000000000122 /* SavedConversationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SavedConversationView.swift; sourceTree = "<group>"; };
 		F0000000000000000000010E /* TopBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopBarView.swift; sourceTree = "<group>"; };
 		F0000000000000000000010F /* WebViewContainer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebViewContainer.swift; sourceTree = "<group>"; };
 		F00000000000000000000110 /* LogoStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogoStore.swift; sourceTree = "<group>"; };
+		F00000000000000000000116 /* ConversationStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationStore.swift; sourceTree = "<group>"; };
 		F00000000000000000000115 /* ViewStyles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ViewStyles.swift; sourceTree = "<group>"; };
 		F00000000000000000000120 /* AppIcon.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; path = AppIcon.icns; sourceTree = "<group>"; };
 		F00000000000000000000121 /* site-config.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "site-config.json"; sourceTree = "<group>"; };
@@ -85,6 +89,7 @@
 				F00000000000000000000102 /* I18n.swift */,
 				F00000000000000000000103 /* Models.swift */,
 				F00000000000000000000104 /* Storage.swift */,
+				F00000000000000000000116 /* ConversationStore.swift */,
 				F00000000000000000000110 /* LogoStore.swift */,
 				F00000000000000000000105 /* WebViewManager.swift */,
 				F00000000000000000000006 /* Views */,
@@ -104,6 +109,7 @@
 				F0000000000000000000010B /* SidebarView.swift */,
 				F0000000000000000000010C /* SiteSettingsView.swift */,
 				F0000000000000000000010D /* SummaryView.swift */,
+				F00000000000000000000122 /* SavedConversationView.swift */,
 				F0000000000000000000010E /* TopBarView.swift */,
 				F0000000000000000000010F /* WebViewContainer.swift */,
 				F00000000000000000000115 /* ViewStyles.swift */,
@@ -210,6 +216,7 @@
 				F00000000000000000000202 /* I18n.swift in Sources */,
 				F00000000000000000000203 /* Models.swift in Sources */,
 				F00000000000000000000204 /* Storage.swift in Sources */,
+				F00000000000000000000218 /* ConversationStore.swift in Sources */,
 				F00000000000000000000211 /* LogoStore.swift in Sources */,
 				F00000000000000000000205 /* WebViewManager.swift in Sources */,
 				F00000000000000000000206 /* AddSiteView.swift in Sources */,
@@ -220,6 +227,7 @@
 				F0000000000000000000020B /* SidebarView.swift in Sources */,
 				F0000000000000000000020C /* SiteSettingsView.swift in Sources */,
 				F0000000000000000000020D /* SummaryView.swift in Sources */,
+				F00000000000000000000222 /* SavedConversationView.swift in Sources */,
 				F0000000000000000000020E /* TopBarView.swift in Sources */,
 				F0000000000000000000020F /* WebViewContainer.swift in Sources */,
 				F00000000000000000000216 /* ViewStyles.swift in Sources */,

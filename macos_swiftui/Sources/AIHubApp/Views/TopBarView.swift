@@ -5,9 +5,7 @@ struct TopBarView: View {
 
     @ObservedObject var webViewManager: WebViewManager
 
-    let showProjects: () -> Void
-    let onCreateTab: () -> Void
-    let onSummarize: () -> Void
+    let onSaveConversation: () -> Void
     let onSwitchTab: (String) -> Void
     let onCloseTab: (String) -> Void
     let onToggleSplit: (Bool) -> Void
@@ -21,26 +19,11 @@ struct TopBarView: View {
             HStack(spacing: 8) {
                 // Action Buttons Group
                 HStack(spacing: 4) {
-                    Button(action: onCreateTab) {
-                        Label(model.t("top.newTab"), systemImage: "plus")
+                    Button(action: onSaveConversation) {
+                        Label(model.t("top.save"), systemImage: "tray.and.arrow.down")
                     }
                     .buttonStyle(ToolbarButtonStyle())
                     .disabled(model.currentSiteId.isEmpty)
-
-                    ToolbarDivider()
-
-                    Button(action: onSummarize) {
-                        Label(model.isSummarizing ? model.t("top.summarizing") : model.t("top.summarize"), systemImage: "doc.text")
-                    }
-                    .buttonStyle(ToolbarButtonStyle())
-                    .disabled(model.isSummarizing)
-
-                    ToolbarDivider()
-
-                    Button(action: showProjects) {
-                        Label(model.t("context.title"), systemImage: "tray.full")
-                    }
-                    .buttonStyle(ToolbarButtonStyle())
 
                     ToolbarDivider()
 

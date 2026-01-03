@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import NaturalLanguage
 import SwiftUI
 
 @MainActor
@@ -20,12 +21,15 @@ final class AppModel: ObservableObject {
     @Published var rightTabId: String?
     @Published var isSummarizing = false
     @Published var errorMessage: String?
+    @Published var toastMessage: String?
     @Published var loading = false
+    @Published var savedSearchResults: [SavedConversationPreview] = []
 
     let webViewManager = WebViewManager()
 
     private var cancellables = Set<AnyCancellable>()
     private let storage = Storage.shared
+    private let conversationStore = ConversationStore.shared
 
     init() {
         var loaded = storage.loadConfig()
@@ -94,17 +98,22 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func updateAiSettings(baseUrl: String, model: String, apiKey: String, clearKey: Bool) {
+    func updateAiSettings(baseUrl: String, model: String, apiKey: String, clearKey: Bool, embeddingModel: String) {
         updateConfig { config in
             let trimmedBase = baseUrl.trimmingCharacters(in: .whitespacesAndNewlines)
             config.aiApiBaseUrl = trimmedBase.isEmpty ? "https://api.openai.com/v1" : trimmedBase
             config.aiApiModel = model
+            config.aiEmbeddingModel = embeddingModel
             if clearKey {
                 config.aiApiKey = ""
             } else if !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 config.aiApiKey = apiKey
             }
         }
+    }
+
+    func updateSearchMode(_ mode: SearchMode) {
+        updateConfig { $0.searchMode = mode.rawValue }
     }
 
     func updateSummaryPromptTemplate(_ template: String) {
@@ -565,6 +574,9 @@ final class AppModel: ObservableObject {
         if sanitized.aiApiBaseUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             sanitized.aiApiBaseUrl = "https://api.openai.com/v1"
         }
+        if SearchMode(rawValue: sanitized.searchMode) == nil {
+            sanitized.searchMode = SearchMode.keyword.rawValue
+        }
         if !existing.contains(sanitized.lastActiveSiteId) {
             sanitized.lastActiveSiteId = ""
             sanitized.lastActiveTabId = ""
@@ -643,6 +655,87 @@ final class AppModel: ObservableObject {
         return try await webViewManager.evaluateJavaScript(tabId: tabId, script: script)
     }
 
+    func saveCurrentConversation() async {
+        let tabId = activeTabId.isEmpty ? currentSiteId : activeTabId
+        guard !tabId.isEmpty else {
+            errorMessage = t("search.noActiveTab")
+            return
+        }
+
+        do {
+            let text = try await extractText(from: tabId)
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty {
+                errorMessage = t("search.noVisibleContent")
+                return
+            }
+
+            let siteId = siteIdForTab(tabId)
+            let siteName = siteId.flatMap { siteById($0)?.name } ?? tabId
+            let siteUrl = siteId.flatMap { siteById($0)?.url } ?? ""
+            let createdAt = nowTs()
+
+            var embedding: [Float]? = nil
+            if currentSearchMode != .keyword {
+                do {
+                    embedding = try await embeddingForText(trimmed, mode: currentSearchMode)
+                } catch {
+                    errorMessage = t("search.embeddingFailed")
+                }
+            }
+
+            _ = try await conversationStore.saveConversation(
+                content: trimmed,
+                siteName: siteName,
+                url: siteUrl,
+                createdAt: createdAt,
+                embedding: embedding
+            )
+            toastMessage = t("search.saveSuccess")
+        } catch {
+            errorMessage = errorText(error)
+        }
+    }
+
+    func updateSavedSearchResults(query: String) async {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            savedSearchResults = []
+            return
+        }
+
+        do {
+            switch currentSearchMode {
+            case .keyword:
+                savedSearchResults = try await conversationStore.searchKeyword(query: trimmed)
+            case .semanticOffline, .semanticOnline:
+                do {
+                    let embedding = try await embeddingForText(trimmed, mode: currentSearchMode)
+                    let semantic = try await conversationStore.searchSemantic(queryEmbedding: embedding)
+                    if semantic.isEmpty {
+                        savedSearchResults = try await conversationStore.searchKeyword(query: trimmed)
+                    } else {
+                        savedSearchResults = semantic
+                    }
+                } catch {
+                    errorMessage = t("search.embeddingFailed")
+                    savedSearchResults = try await conversationStore.searchKeyword(query: trimmed)
+                }
+            }
+        } catch {
+            errorMessage = errorText(error)
+        }
+    }
+
+    func fetchSavedConversation(id: Int64) async throws -> SavedConversation? {
+        try await conversationStore.fetchConversation(id: id)
+    }
+
+    func clearSavedHistory() async throws {
+        try await conversationStore.clearHistory()
+        savedSearchResults = []
+    }
+
     private func summarizeText(_ text: String, siteId: String?) async throws -> String {
         let trimmedKey = config.aiApiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedModel = config.aiApiModel.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -699,6 +792,80 @@ final class AppModel: ObservableObject {
         return content
     }
 
+    private var currentSearchMode: SearchMode {
+        SearchMode(rawValue: config.searchMode) ?? .keyword
+    }
+
+    private func embeddingForText(_ text: String, mode: SearchMode) async throws -> [Float] {
+        switch mode {
+        case .semanticOffline:
+            return try offlineEmbedding(for: text)
+        case .semanticOnline:
+            return try await onlineEmbedding(for: text)
+        case .keyword:
+            return []
+        }
+    }
+
+    private func offlineEmbedding(for text: String) throws -> [Float] {
+        let language = SupportedLanguage.fromConfig(config.language).nlLanguage
+        guard let embedding = NLEmbedding.sentenceEmbedding(for: language) else {
+            throw AppError(message: t("search.embeddingUnavailable"))
+        }
+        guard let vector = embedding.vector(for: text) else {
+            throw AppError(message: t("search.embeddingFailed"))
+        }
+        return vector.map { Float($0) }
+    }
+
+    private func onlineEmbedding(for text: String) async throws -> [Float] {
+        let trimmedKey = config.aiApiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedModel = effectiveEmbeddingModel
+        if trimmedKey.isEmpty {
+            throw AppError(message: t("search.embeddingMissingKey"))
+        }
+        if trimmedModel.isEmpty {
+            throw AppError(message: t("search.embeddingMissingModel"))
+        }
+
+        let baseUrl = config.aiApiBaseUrl.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let url = URL(string: "\(baseUrl)/embeddings")!
+        let body: [String: Any] = [
+            "model": trimmedModel,
+            "input": text
+        ]
+
+        let data = try JSONSerialization.data(withJSONObject: body)
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(trimmedKey)", forHTTPHeaderField: "Authorization")
+        request.httpBody = data
+
+        let (respData, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw AppError(message: t("search.embeddingFailed"))
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            let bodyText = String(data: respData, encoding: .utf8) ?? ""
+            throw AppError(message: "\(t("search.embeddingFailed")) (\(http.statusCode)): \(bodyText)")
+        }
+
+        let decoded = try JSONDecoder().decode(OpenAiEmbeddingResponse.self, from: respData)
+        guard let embedding = decoded.data.first?.embedding else {
+            throw AppError(message: t("search.embeddingFailed"))
+        }
+        return embedding.map { Float($0) }
+    }
+
+    private var effectiveEmbeddingModel: String {
+        let embeddingModel = config.aiEmbeddingModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !embeddingModel.isEmpty {
+            return embeddingModel
+        }
+        return config.aiApiModel.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     private func buildSummaryPrompt(template: String, language: String, text: String) -> String {
         var rendered = template.replacingOccurrences(of: "{language}", with: language)
         rendered = rendered.replacingOccurrences(of: "{text}", with: text)
@@ -709,6 +876,10 @@ final class AppModel: ObservableObject {
             rendered += "\n\n\(text)"
         }
         return rendered
+    }
+
+    private func errorText(_ error: Error) -> String {
+        (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
     }
 
     private func firstSiteId(excluding siteId: String) -> String? {
@@ -732,4 +903,12 @@ private struct OpenAiChoice: Codable {
 
 private struct OpenAiMessage: Codable {
     let content: String
+}
+
+private struct OpenAiEmbeddingResponse: Codable {
+    let data: [OpenAiEmbeddingItem]
+}
+
+private struct OpenAiEmbeddingItem: Codable {
+    let embedding: [Double]
 }

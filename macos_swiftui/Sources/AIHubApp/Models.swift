@@ -31,6 +31,8 @@ struct AppConfig: Codable {
     var aiApiBaseUrl: String
     var aiApiModel: String
     var aiApiKey: String
+    var searchMode: String
+    var aiEmbeddingModel: String
     var activeProjectId: String
     var lastActiveTabId: String
     var lastActiveSiteId: String
@@ -48,6 +50,8 @@ struct AppConfig: Codable {
         case aiApiBaseUrl = "ai_api_base_url"
         case aiApiModel = "ai_api_model"
         case aiApiKey = "ai_api_key"
+        case searchMode = "search_mode"
+        case aiEmbeddingModel = "ai_embedding_model"
         case activeProjectId = "active_project_id"
         case lastActiveTabId = "last_active_tab_id"
         case lastActiveSiteId = "last_active_site_id"
@@ -80,4 +84,39 @@ struct TabInfo: Identifiable, Hashable {
 enum LayoutMode: String {
     case single
     case split
+}
+
+enum SearchMode: String, CaseIterable, Identifiable {
+    case keyword = "keyword"
+    case semanticOffline = "semantic_offline"
+    case semanticOnline = "semantic_online"
+
+    var id: String { rawValue }
+}
+
+struct SavedConversation: Identifiable, Hashable {
+    var id: Int64
+    var siteName: String
+    var url: String
+    var content: String
+    var createdAt: UInt64
+
+    var snippet: String {
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let endIndex = trimmed.index(trimmed.startIndex, offsetBy: 80, limitedBy: trimmed.endIndex) else {
+            return ""
+        }
+        if endIndex == trimmed.endIndex {
+            return trimmed
+        }
+        return String(trimmed[..<endIndex]) + "…"
+    }
+}
+
+struct SavedConversationPreview: Identifiable, Hashable {
+    var id: Int64
+    var siteName: String
+    var url: String
+    var snippet: String
+    var createdAt: UInt64
 }

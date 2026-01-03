@@ -1,8 +1,7 @@
 import AppKit
 import Foundation
 
-@MainActor
-final class Storage {
+final class Storage: @unchecked Sendable {
     static let shared = Storage()
 
     private let fileManager = FileManager.default
@@ -97,6 +96,10 @@ final class Storage {
         fileManager.fileExists(atPath: logoURL(for: key).path)
     }
 
+    func conversationsDBURL() -> URL {
+        baseURL.appendingPathComponent("conversations.sqlite3")
+    }
+
     func defaultConfig() -> AppConfig {
         let builtin = Storage.builtinSites()
         let order = builtin.map { $0.id }
@@ -113,6 +116,8 @@ final class Storage {
             aiApiBaseUrl: "https://api.openai.com/v1",
             aiApiModel: "",
             aiApiKey: "",
+            searchMode: SearchMode.keyword.rawValue,
+            aiEmbeddingModel: "",
             activeProjectId: "",
             lastActiveTabId: "",
             lastActiveSiteId: ""
