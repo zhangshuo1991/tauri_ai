@@ -157,119 +157,289 @@ private enum MarkdownRenderer {
         if markdown.count > markdownSoftLimit {
             return NSAttributedString(string: markdown)
         }
-        let parsed = parse(markdown)
-        let baseFont = NSFont.systemFont(ofSize: 13)
-        let attributed = NSMutableAttributedString(
-            string: parsed.text,
-            attributes: [
-                .font: baseFont,
-                .foregroundColor: NSColor.labelColor
-            ]
-        )
-        applyHighlights(parsed.highlights, to: attributed)
-        applyCode(parsed.codeRanges, to: attributed)
-        return attributed
+        return parseMarkdown(markdown)
     }
 
-    private static func parse(_ markdown: String) -> ParsedMarkdown {
-        var output = ""
-        var highlights: [NSRange] = []
-        var codeRanges: [NSRange] = []
-
-        var index = markdown.startIndex
+    private static func parseMarkdown(_ markdown: String) -> NSAttributedString {
+        let result = NSMutableAttributedString()
+        let lines = markdown.components(separatedBy: "\n")
         var inCodeBlock = false
-        var inInlineCode = false
-        var inHighlight = false
+        var codeBlockContent = ""
+        var codeBlockLang = "" // Reserved for future syntax highlighting
 
-        var codeBlockStart: Int?
-        var inlineCodeStart: Int?
-        var highlightStart: Int?
+        let baseFont = NSFont.systemFont(ofSize: 13)
+        let codeFont = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        let baseParagraphStyle = NSMutableParagraphStyle()
+        baseParagraphStyle.lineSpacing = 4
 
-        func currentOffset() -> Int {
-            output.utf16.count
-        }
-
-        while index < markdown.endIndex {
-            if markdown[index...].hasPrefix("```") {
+        for (lineIndex, line) in lines.enumerated() {
+            // Code block handling
+            if line.hasPrefix("```") {
                 if inCodeBlock {
-                    if let start = codeBlockStart {
-                        let length = currentOffset() - start
-                        if length > 0 {
-                            codeRanges.append(NSRange(location: start, length: length))
-                        }
-                    }
-                    codeBlockStart = nil
+                    // End code block
+                    let codeAttr = NSMutableAttributedString(
+                        string: codeBlockContent,
+                        attributes: [
+                            .font: codeFont,
+                            .foregroundColor: NSColor.labelColor,
+                            .backgroundColor: NSColor.quaternaryLabelColor
+                        ]
+                    )
+                    result.append(codeAttr)
+                    result.append(NSAttributedString(string: "\n"))
+                    codeBlockContent = ""
+                    codeBlockLang = ""
                     inCodeBlock = false
-                } else if !inInlineCode {
+                } else {
+                    // Start code block
                     inCodeBlock = true
-                    codeBlockStart = currentOffset()
+                    codeBlockLang = String(line.dropFirst(3)).trimmingCharacters(in: .whitespaces)
                 }
-                index = markdown.index(index, offsetBy: 3)
                 continue
             }
 
-            if !inCodeBlock {
-                if markdown[index...].hasPrefix("==") {
-                    if inHighlight {
-                        if let start = highlightStart {
-                            let length = currentOffset() - start
-                            if length > 0 {
-                                highlights.append(NSRange(location: start, length: length))
-                            }
-                        }
-                        highlightStart = nil
-                        inHighlight = false
-                    } else {
-                        inHighlight = true
-                        highlightStart = currentOffset()
-                    }
-                    index = markdown.index(index, offsetBy: 2)
-                    continue
+            if inCodeBlock {
+                if !codeBlockContent.isEmpty {
+                    codeBlockContent += "\n"
                 }
-
-                if markdown[index] == "`" {
-                    if inInlineCode {
-                        if let start = inlineCodeStart {
-                            let length = currentOffset() - start
-                            if length > 0 {
-                                codeRanges.append(NSRange(location: start, length: length))
-                            }
-                        }
-                        inlineCodeStart = nil
-                        inInlineCode = false
-                    } else {
-                        inInlineCode = true
-                        inlineCodeStart = currentOffset()
-                    }
-                    index = markdown.index(after: index)
-                    continue
-                }
+                codeBlockContent += line
+                continue
             }
 
-            output.append(markdown[index])
-            index = markdown.index(after: index)
+            // Process non-code-block lines
+            let lineAttr = parseLine(line, baseFont: baseFont, codeFont: codeFont, paragraphStyle: baseParagraphStyle)
+            result.append(lineAttr)
+
+            // Add newline between lines (except for the last line)
+            if lineIndex < lines.count - 1 {
+                result.append(NSAttributedString(string: "\n"))
+            }
         }
 
-        return ParsedMarkdown(text: output, highlights: highlights, codeRanges: codeRanges)
-    }
-
-    private static func applyHighlights(_ ranges: [NSRange], to attributed: NSMutableAttributedString) {
-        for range in ranges where range.length > 0 && NSMaxRange(range) <= attributed.length {
-            attributed.addAttribute(.backgroundColor, value: NSColor.systemYellow.withAlphaComponent(0.25), range: range)
+        // Handle unclosed code block
+        if inCodeBlock && !codeBlockContent.isEmpty {
+            let codeAttr = NSMutableAttributedString(
+                string: codeBlockContent,
+                attributes: [
+                    .font: codeFont,
+                    .foregroundColor: NSColor.labelColor,
+                    .backgroundColor: NSColor.quaternaryLabelColor
+                ]
+            )
+            result.append(codeAttr)
         }
+
+        return result
     }
 
-    private static func applyCode(_ ranges: [NSRange], to attributed: NSMutableAttributedString) {
-        let codeFont = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
-        for range in ranges where range.length > 0 && NSMaxRange(range) <= attributed.length {
-            attributed.addAttribute(.font, value: codeFont, range: range)
-            attributed.addAttribute(.backgroundColor, value: NSColor.textBackgroundColor.withAlphaComponent(0.6), range: range)
+    private static func parseLine(_ line: String, baseFont: NSFont, codeFont: NSFont, paragraphStyle: NSParagraphStyle) -> NSAttributedString {
+        // Headings
+        if let headingMatch = line.range(of: "^#{1,6}\\s+", options: .regularExpression) {
+            let level = line[headingMatch].filter { $0 == "#" }.count
+            let content = String(line[headingMatch.upperBound...])
+            let fontSize: CGFloat = [24, 20, 18, 16, 14, 13][min(level - 1, 5)]
+            let headingFont = NSFont.systemFont(ofSize: fontSize, weight: .bold)
+            let headingParagraph = NSMutableParagraphStyle()
+            headingParagraph.paragraphSpacingBefore = 8
+            headingParagraph.paragraphSpacing = 4
+            return parseInlineElements(content, baseFont: headingFont, codeFont: codeFont, paragraphStyle: headingParagraph)
         }
-    }
-}
 
-private struct ParsedMarkdown {
-    let text: String
-    let highlights: [NSRange]
-    let codeRanges: [NSRange]
+        // Horizontal rule
+        if line.trimmingCharacters(in: .whitespaces).range(of: "^-{3,}$|^\\*{3,}$|^_{3,}$", options: .regularExpression) != nil {
+            let hrAttr = NSMutableAttributedString(string: "─────────────────────────────────────────\n")
+            hrAttr.addAttribute(.foregroundColor, value: NSColor.separatorColor, range: NSRange(location: 0, length: hrAttr.length))
+            return hrAttr
+        }
+
+        // Blockquote
+        if line.hasPrefix(">") {
+            let content = String(line.dropFirst()).trimmingCharacters(in: .whitespaces)
+            let quoteAttr = parseInlineElements(content, baseFont: baseFont, codeFont: codeFont, paragraphStyle: paragraphStyle)
+            let mutable = NSMutableAttributedString(string: "│ ", attributes: [
+                .foregroundColor: NSColor.systemGray,
+                .font: baseFont
+            ])
+            mutable.append(quoteAttr)
+            mutable.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor, range: NSRange(location: 2, length: mutable.length - 2))
+            return mutable
+        }
+
+        // Unordered list
+        if let listMatch = line.range(of: "^(\\s*)[-*+]\\s+", options: .regularExpression) {
+            let indent = line[listMatch].filter { $0 == " " || $0 == "\t" }.count
+            let content = String(line[listMatch.upperBound...])
+            let bullet = String(repeating: "  ", count: indent / 2) + "• "
+            let bulletAttr = NSMutableAttributedString(string: bullet, attributes: [
+                .font: baseFont,
+                .foregroundColor: NSColor.secondaryLabelColor
+            ])
+            bulletAttr.append(parseInlineElements(content, baseFont: baseFont, codeFont: codeFont, paragraphStyle: paragraphStyle))
+            return bulletAttr
+        }
+
+        // Ordered list
+        if let listMatch = line.range(of: "^(\\s*)\\d+\\.\\s+", options: .regularExpression) {
+            let indent = line[listMatch].filter { $0 == " " || $0 == "\t" }.count
+            let content = String(line[listMatch.upperBound...])
+            let numberMatch = line[listMatch].filter { $0.isNumber }
+            let prefix = String(repeating: "  ", count: indent / 2) + numberMatch + ". "
+            let prefixAttr = NSMutableAttributedString(string: prefix, attributes: [
+                .font: baseFont,
+                .foregroundColor: NSColor.secondaryLabelColor
+            ])
+            prefixAttr.append(parseInlineElements(content, baseFont: baseFont, codeFont: codeFont, paragraphStyle: paragraphStyle))
+            return prefixAttr
+        }
+
+        // Table row
+        if line.hasPrefix("|") && line.hasSuffix("|") {
+            let trimmed = line.dropFirst().dropLast()
+            // Check if it's a separator row
+            if trimmed.range(of: "^[\\s|:-]+$", options: .regularExpression) != nil {
+                return NSAttributedString(string: "")
+            }
+            let cells = trimmed.components(separatedBy: "|").map { $0.trimmingCharacters(in: .whitespaces) }
+            let tableAttr = NSMutableAttributedString()
+            for (index, cell) in cells.enumerated() {
+                if index > 0 {
+                    tableAttr.append(NSAttributedString(string: " │ ", attributes: [
+                        .foregroundColor: NSColor.separatorColor,
+                        .font: baseFont
+                    ]))
+                }
+                tableAttr.append(parseInlineElements(cell, baseFont: baseFont, codeFont: codeFont, paragraphStyle: paragraphStyle))
+            }
+            return tableAttr
+        }
+
+        // Regular paragraph
+        return parseInlineElements(line, baseFont: baseFont, codeFont: codeFont, paragraphStyle: paragraphStyle)
+    }
+
+    private static func parseInlineElements(_ text: String, baseFont: NSFont, codeFont: NSFont, paragraphStyle: NSParagraphStyle) -> NSAttributedString {
+        let result = NSMutableAttributedString()
+        var currentIndex = text.startIndex
+
+        // Regex patterns for inline elements
+        let patterns: [(pattern: String, handler: (String, [String]) -> NSAttributedString)] = [
+            // Image: ![alt](url)
+            ("!\\[([^\\]]*)\\]\\(([^)]+)\\)", { _, groups in
+                let alt = groups.count > 0 ? groups[0] : ""
+                return NSAttributedString(string: "[Image: \(alt)]", attributes: [
+                    .foregroundColor: NSColor.systemBlue,
+                    .font: baseFont
+                ])
+            }),
+            // Link: [text](url)
+            ("\\[([^\\]]+)\\]\\(([^)]+)\\)", { _, groups in
+                let linkText = groups.count > 0 ? groups[0] : ""
+                let url = groups.count > 1 ? groups[1] : ""
+                let attr = NSMutableAttributedString(string: linkText, attributes: [
+                    .foregroundColor: NSColor.linkColor,
+                    .font: baseFont,
+                    .underlineStyle: NSUnderlineStyle.single.rawValue
+                ])
+                if let linkURL = URL(string: url) {
+                    attr.addAttribute(.link, value: linkURL, range: NSRange(location: 0, length: attr.length))
+                }
+                return attr
+            }),
+            // Bold + Italic: ***text*** or ___text___
+            ("\\*{3}([^*]+)\\*{3}|_{3}([^_]+)_{3}", { _, groups in
+                let content = groups.first { !$0.isEmpty } ?? ""
+                return NSAttributedString(string: content, attributes: [
+                    .font: NSFont(descriptor: baseFont.fontDescriptor.withSymbolicTraits([.bold, .italic]), size: baseFont.pointSize) ?? baseFont,
+                    .foregroundColor: NSColor.labelColor
+                ])
+            }),
+            // Bold: **text** or __text__
+            ("\\*{2}([^*]+)\\*{2}|_{2}([^_]+)_{2}", { _, groups in
+                let content = groups.first { !$0.isEmpty } ?? ""
+                return NSAttributedString(string: content, attributes: [
+                    .font: NSFont.boldSystemFont(ofSize: baseFont.pointSize),
+                    .foregroundColor: NSColor.labelColor
+                ])
+            }),
+            // Italic: *text* or _text_
+            ("(?<![*_])\\*([^*]+)\\*(?![*_])|(?<![*_])_([^_]+)_(?![*_])", { _, groups in
+                let content = groups.first { !$0.isEmpty } ?? ""
+                return NSAttributedString(string: content, attributes: [
+                    .font: NSFont(descriptor: baseFont.fontDescriptor.withSymbolicTraits(.italic), size: baseFont.pointSize) ?? baseFont,
+                    .foregroundColor: NSColor.labelColor
+                ])
+            }),
+            // Strikethrough: ~~text~~
+            ("~~([^~]+)~~", { _, groups in
+                let content = groups.count > 0 ? groups[0] : ""
+                return NSAttributedString(string: content, attributes: [
+                    .font: baseFont,
+                    .foregroundColor: NSColor.secondaryLabelColor,
+                    .strikethroughStyle: NSUnderlineStyle.single.rawValue
+                ])
+            }),
+            // Highlight: ==text==
+            ("==([^=]+)==", { _, groups in
+                let content = groups.count > 0 ? groups[0] : ""
+                return NSAttributedString(string: content, attributes: [
+                    .font: baseFont,
+                    .foregroundColor: NSColor.labelColor,
+                    .backgroundColor: NSColor.systemYellow.withAlphaComponent(0.3)
+                ])
+            }),
+            // Inline code: `text`
+            ("`([^`]+)`", { _, groups in
+                let content = groups.count > 0 ? groups[0] : ""
+                return NSAttributedString(string: content, attributes: [
+                    .font: codeFont,
+                    .foregroundColor: NSColor.labelColor,
+                    .backgroundColor: NSColor.quaternaryLabelColor
+                ])
+            })
+        ]
+
+        while currentIndex < text.endIndex {
+            var foundMatch = false
+            let remainingText = String(text[currentIndex...])
+
+            for (pattern, handler) in patterns {
+                guard let regex = try? NSRegularExpression(pattern: pattern, options: []),
+                      let match = regex.firstMatch(in: remainingText, options: [], range: NSRange(remainingText.startIndex..., in: remainingText)),
+                      match.range.location == 0 else {
+                    continue
+                }
+
+                // Extract capture groups
+                var groups: [String] = []
+                for i in 1..<match.numberOfRanges {
+                    if let range = Range(match.range(at: i), in: remainingText) {
+                        groups.append(String(remainingText[range]))
+                    } else {
+                        groups.append("")
+                    }
+                }
+
+                let fullMatch = String(remainingText[Range(match.range, in: remainingText)!])
+                result.append(handler(fullMatch, groups))
+
+                currentIndex = text.index(currentIndex, offsetBy: fullMatch.count)
+                foundMatch = true
+                break
+            }
+
+            if !foundMatch {
+                result.append(NSAttributedString(string: String(text[currentIndex]), attributes: [
+                    .font: baseFont,
+                    .foregroundColor: NSColor.labelColor
+                ]))
+                currentIndex = text.index(after: currentIndex)
+            }
+        }
+
+        if result.length > 0 {
+            result.addAttribute(.paragraphStyle, value: paragraphStyle, range: NSRange(location: 0, length: result.length))
+        }
+
+        return result
+    }
 }

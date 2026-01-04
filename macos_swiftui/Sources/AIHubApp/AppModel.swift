@@ -697,17 +697,17 @@ final class AppModel: ObservableObject {
     private func extractMarkdown(from tabId: String) async throws -> String {
         let script = """
         (() => {
-          const blockTags = new Set(["p","div","section","article","li","ul","ol","br","h1","h2","h3","h4","h5","h6","tr"]);
           const isHighlight = (el) => {
             const tag = el.tagName ? el.tagName.toLowerCase() : "";
             if (tag === "mark") return true;
             const cls = (el.getAttribute("class") || "").toLowerCase();
             if (cls.includes("highlight")) return true;
             const style = (el.getAttribute("style") || "").toLowerCase();
-            if (style.includes("background")) return true;
+            if (style.includes("background") && style.includes("yellow")) return true;
             return false;
           };
-          const walk = (node) => {
+
+          const walk = (node, listDepth = 0, listType = null) => {
             if (!node) return "";
             if (node.nodeType === Node.TEXT_NODE) {
               return node.nodeValue || "";
@@ -717,31 +717,190 @@ final class AppModel: ObservableObject {
             }
             const el = node;
             const tag = el.tagName.toLowerCase();
+
+            // Skip hidden elements
+            const style = window.getComputedStyle(el);
+            if (style.display === "none" || style.visibility === "hidden") return "";
+
+            // Line break
             if (tag === "br") return "\\n";
+
+            // Horizontal rule
+            if (tag === "hr") return "\\n\\n---\\n\\n";
+
+            // Code blocks
             if (tag === "pre") {
-              const text = el.innerText || "";
-              return "\\n\\n```\\n" + text + "\\n```\\n\\n";
+              const codeEl = el.querySelector("code");
+              const text = codeEl ? codeEl.innerText : el.innerText || "";
+              const langClass = codeEl?.className.match(/language-(\\w+)/);
+              const lang = langClass ? langClass[1] : "";
+              return "\\n\\n```" + lang + "\\n" + text + "\\n```\\n\\n";
             }
+
+            // Inline code (not inside pre)
             if (tag === "code") {
               if (el.closest("pre")) return "";
               const text = el.innerText || "";
               return "`" + text + "`";
             }
+
+            // Links
+            if (tag === "a") {
+              const href = el.getAttribute("href") || "";
+              let content = "";
+              for (const child of el.childNodes) {
+                content += walk(child, listDepth, listType);
+              }
+              content = content.trim();
+              if (href && content && !href.startsWith("javascript:")) {
+                return "[" + content + "](" + href + ")";
+              }
+              return content;
+            }
+
+            // Images
+            if (tag === "img") {
+              const alt = el.getAttribute("alt") || "";
+              const src = el.getAttribute("src") || "";
+              if (src) {
+                return "![" + alt + "](" + src + ")";
+              }
+              return "";
+            }
+
+            // Bold
+            if (tag === "strong" || tag === "b") {
+              let content = "";
+              for (const child of el.childNodes) {
+                content += walk(child, listDepth, listType);
+              }
+              return "**" + content + "**";
+            }
+
+            // Italic
+            if (tag === "em" || tag === "i") {
+              let content = "";
+              for (const child of el.childNodes) {
+                content += walk(child, listDepth, listType);
+              }
+              return "*" + content + "*";
+            }
+
+            // Strikethrough
+            if (tag === "del" || tag === "s" || tag === "strike") {
+              let content = "";
+              for (const child of el.childNodes) {
+                content += walk(child, listDepth, listType);
+              }
+              return "~~" + content + "~~";
+            }
+
+            // Headings
+            if (/^h[1-6]$/.test(tag)) {
+              const level = parseInt(tag[1]);
+              let content = "";
+              for (const child of el.childNodes) {
+                content += walk(child, listDepth, listType);
+              }
+              return "\\n\\n" + "#".repeat(level) + " " + content.trim() + "\\n\\n";
+            }
+
+            // Blockquote
+            if (tag === "blockquote") {
+              let content = "";
+              for (const child of el.childNodes) {
+                content += walk(child, listDepth, listType);
+              }
+              const lines = content.trim().split("\\n");
+              return "\\n\\n" + lines.map(l => "> " + l).join("\\n") + "\\n\\n";
+            }
+
+            // Unordered list
+            if (tag === "ul") {
+              let content = "";
+              for (const child of el.childNodes) {
+                content += walk(child, listDepth + 1, "ul");
+              }
+              return listDepth === 0 ? "\\n" + content + "\\n" : content;
+            }
+
+            // Ordered list
+            if (tag === "ol") {
+              let content = "";
+              let index = 1;
+              for (const child of el.childNodes) {
+                if (child.nodeType === Node.ELEMENT_NODE && child.tagName.toLowerCase() === "li") {
+                  content += walk(child, listDepth + 1, "ol", index);
+                  index++;
+                } else {
+                  content += walk(child, listDepth + 1, "ol");
+                }
+              }
+              return listDepth === 0 ? "\\n" + content + "\\n" : content;
+            }
+
+            // List item
+            if (tag === "li") {
+              const indent = "  ".repeat(Math.max(0, listDepth - 1));
+              let content = "";
+              for (const child of el.childNodes) {
+                content += walk(child, listDepth, listType);
+              }
+              const prefix = listType === "ol" ? "1. " : "- ";
+              return indent + prefix + content.trim() + "\\n";
+            }
+
+            // Table
+            if (tag === "table") {
+              let rows = [];
+              const trs = el.querySelectorAll("tr");
+              trs.forEach((tr, rowIndex) => {
+                const cells = tr.querySelectorAll("th, td");
+                const row = Array.from(cells).map(cell => {
+                  let content = "";
+                  for (const child of cell.childNodes) {
+                    content += walk(child, listDepth, listType);
+                  }
+                  return content.trim().replace(/\\|/g, "\\\\|").replace(/\\n/g, " ");
+                });
+                rows.push("| " + row.join(" | ") + " |");
+                if (rowIndex === 0) {
+                  rows.push("| " + row.map(() => "---").join(" | ") + " |");
+                }
+              });
+              return "\\n\\n" + rows.join("\\n") + "\\n\\n";
+            }
+
+            // Skip table internal elements (handled by table)
+            if (["thead", "tbody", "tfoot", "tr", "th", "td"].includes(tag)) {
+              return "";
+            }
+
+            // Paragraph and block elements
             let content = "";
             for (const child of el.childNodes) {
-              content += walk(child);
+              content += walk(child, listDepth, listType);
             }
+
             if (isHighlight(el)) {
-              content = `==${content}==`;
+              content = "==" + content + "==";
             }
+
+            const blockTags = new Set(["p", "div", "section", "article", "header", "footer", "main", "aside", "nav"]);
             if (blockTags.has(tag)) {
-              return content + "\\n";
+              return "\\n" + content.trim() + "\\n";
             }
+
             return content;
           };
+
           const body = document.body;
           if (!body) return "";
-          return walk(body).replace(/\\n{3,}/g, "\\n\\n").trim();
+          return walk(body)
+            .replace(/\\n{3,}/g, "\\n\\n")
+            .replace(/^\\n+/, "")
+            .replace(/\\n+$/, "")
+            .trim();
         })();
         """
         return try await webViewManager.evaluateJavaScript(tabId: tabId, script: script)
