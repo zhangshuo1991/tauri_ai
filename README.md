@@ -2,13 +2,17 @@
 
 AIHubApp is a macOS native client that brings multiple AI web assistants into one focused workspace. It provides fast switching between services, split‑view browsing, and session‑aware tabs so users can compare answers without juggling multiple browser windows.
 
+## Screenshots
+![AIHubApp Screenshot 1](image1.png)
+![AIHubApp Screenshot 2](image2.png)
+![AIHubApp Screenshot 3](image3.png)
+
 ## Key Features
 - **Multi‑site AI hub**: Access multiple AI web services in a single app.
 - **Tabs & split view**: Open multiple sessions and compare responses side‑by‑side.
 - **Per‑tab loading status**: See page load progress and failure/timeout status directly in the tab title.
 - **Pin and organize**: Pin favorite sites, search, and reorder the sidebar.
 - **Privacy‑minded**: Local configuration and settings stored on your Mac.
-
 ## Installation (macOS DMG)
 1. Open `AIHubApp.dmg`.
 2. Drag **AIHubApp** into the **Applications** folder.
