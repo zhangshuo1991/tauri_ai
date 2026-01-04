@@ -27,6 +27,7 @@ struct ContentView: View {
     var body: some View {
         let overlayOpen = showSettings || showAddSite || showSiteSettings || showSavedConversation
         let homeVisible = showHome || model.currentSiteId.isEmpty
+        let toolbarVisible = !model.config.toolbarAutoHide || showTopBar
 
         ZStack(alignment: .top) {
             HStack(spacing: 0) {
@@ -77,10 +78,10 @@ struct ContentView: View {
                                 updateTopBarVisibility()
                             }
 
-                        if showTopBar {
-                    TopBarView(
-                        webViewManager: model.webViewManager,
-                        onShowHome: {
+                        if toolbarVisible {
+                            TopBarView(
+                                webViewManager: model.webViewManager,
+                                onShowHome: {
                             showHome = true
                         },
                         onSaveConversation: {
@@ -230,6 +231,11 @@ struct ContentView: View {
     }
 
     private func updateTopBarVisibility() {
+        guard model.config.toolbarAutoHide else {
+            cancelTopBarHide()
+            showTopBar = true
+            return
+        }
         if isHoveringTopBar || isHoveringTopBarReveal {
             showTopBarIfNeeded()
         } else {
@@ -238,6 +244,10 @@ struct ContentView: View {
     }
 
     private func showTopBarIfNeeded() {
+        guard model.config.toolbarAutoHide else {
+            showTopBar = true
+            return
+        }
         cancelTopBarHide()
         if !showTopBar {
             withAnimation(.easeInOut(duration: 0.18)) {
@@ -247,6 +257,7 @@ struct ContentView: View {
     }
 
     private func scheduleTopBarHide() {
+        guard model.config.toolbarAutoHide else { return }
         guard showTopBar else { return }
         cancelTopBarHide()
         let workItem = DispatchWorkItem {

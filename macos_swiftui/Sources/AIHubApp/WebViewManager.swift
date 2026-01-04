@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import WebKit
 
@@ -75,6 +76,7 @@ window.chrome = { runtime: {}, loadTimes: function() {}, csi: function() {}, app
 
         let delegate = NavigationDelegate(tabId: tabId, manager: self)
         webview.navigationDelegate = delegate
+        webview.uiDelegate = delegate
         delegates[tabId] = delegate
         webviews[tabId] = webview
         progressObservers[tabId] = webview.observe(\.estimatedProgress, options: [.new]) { [weak self] webview, _ in
@@ -200,13 +202,21 @@ window.chrome = { runtime: {}, loadTimes: function() {}, csi: function() {}, app
         timeoutWorkItems[tabId] = nil
     }
 
-    private final class NavigationDelegate: NSObject, WKNavigationDelegate {
+    private final class NavigationDelegate: NSObject, WKNavigationDelegate, WKUIDelegate {
         private let tabId: String
         private weak var manager: WebViewManager?
 
         init(tabId: String, manager: WebViewManager) {
             self.tabId = tabId
             self.manager = manager
+        }
+
+        func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
+            if navigationAction.targetFrame == nil, let url = navigationAction.request.url {
+                NSWorkspace.shared.open(url)
+                return .cancel
+            }
+            return .allow
         }
 
         func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
@@ -225,6 +235,14 @@ window.chrome = { runtime: {}, loadTimes: function() {}, csi: function() {}, app
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
             manager?.markLoadFailed(tabId: tabId)
             manager?.setError(message: error.localizedDescription)
+        }
+
+        func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
+            guard let url = navigationAction.request.url else {
+                return nil
+            }
+            NSWorkspace.shared.open(url)
+            return nil
         }
     }
 }

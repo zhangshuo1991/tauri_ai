@@ -31,3 +31,4 @@ openspec/*
 *.dmg
 .claude/*
 **/.dmg_staging/*
+**/.xcodebuild_universal/*

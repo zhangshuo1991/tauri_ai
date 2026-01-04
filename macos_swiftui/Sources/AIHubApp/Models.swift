@@ -28,6 +28,9 @@ struct AppConfig: Codable {
     var sidebarExpandedWidth: Double
     var sidebarIconSize: Double
     var sidebarTextSize: Double
+    var toolbarAutoHide: Bool
+    var autoSaveEnabled: Bool
+    var autoSaveInterval: Double
     var language: String
     var summaryPromptTemplate: String
     var aiApiBaseUrl: String
@@ -49,6 +52,9 @@ struct AppConfig: Codable {
         case sidebarExpandedWidth = "sidebar_expanded_width"
         case sidebarIconSize = "sidebar_icon_size"
         case sidebarTextSize = "sidebar_text_size"
+        case toolbarAutoHide = "toolbar_auto_hide"
+        case autoSaveEnabled = "auto_save_enabled"
+        case autoSaveInterval = "auto_save_interval"
         case language
         case summaryPromptTemplate = "summary_prompt_template"
         case aiApiBaseUrl = "ai_api_base_url"
@@ -71,6 +77,9 @@ struct AppConfig: Codable {
         sidebarExpandedWidth: Double,
         sidebarIconSize: Double,
         sidebarTextSize: Double,
+        toolbarAutoHide: Bool,
+        autoSaveEnabled: Bool,
+        autoSaveInterval: Double,
         language: String,
         summaryPromptTemplate: String,
         aiApiBaseUrl: String,
@@ -91,6 +100,9 @@ struct AppConfig: Codable {
         self.sidebarExpandedWidth = sidebarExpandedWidth
         self.sidebarIconSize = sidebarIconSize
         self.sidebarTextSize = sidebarTextSize
+        self.toolbarAutoHide = toolbarAutoHide
+        self.autoSaveEnabled = autoSaveEnabled
+        self.autoSaveInterval = autoSaveInterval
         self.language = language
         self.summaryPromptTemplate = summaryPromptTemplate
         self.aiApiBaseUrl = aiApiBaseUrl
@@ -114,6 +126,9 @@ struct AppConfig: Codable {
         sidebarExpandedWidth = try container.decode(Double.self, forKey: .sidebarExpandedWidth)
         sidebarIconSize = try container.decodeIfPresent(Double.self, forKey: .sidebarIconSize) ?? 28
         sidebarTextSize = try container.decodeIfPresent(Double.self, forKey: .sidebarTextSize) ?? 15
+        toolbarAutoHide = try container.decodeIfPresent(Bool.self, forKey: .toolbarAutoHide) ?? true
+        autoSaveEnabled = try container.decodeIfPresent(Bool.self, forKey: .autoSaveEnabled) ?? true
+        autoSaveInterval = try container.decodeIfPresent(Double.self, forKey: .autoSaveInterval) ?? 30
         language = try container.decode(String.self, forKey: .language)
         summaryPromptTemplate = try container.decode(String.self, forKey: .summaryPromptTemplate)
         aiApiBaseUrl = try container.decode(String.self, forKey: .aiApiBaseUrl)
@@ -168,6 +183,7 @@ struct SavedConversation: Identifiable, Hashable {
     var siteName: String
     var url: String
     var content: String
+    var markdown: String
     var createdAt: UInt64
 
     var snippet: String {

@@ -8,13 +8,15 @@ final class ConversationStore: @unchecked Sendable {
 
     private let queue = DispatchQueue(label: "ConversationStore")
     private var db: OpaquePointer?
+    private let dbPath: String
     private let maxResults = 50
 
     private init() {
         Storage.shared.ensureBaseDirectory()
         let dbURL = Storage.shared.conversationsDBURL()
+        dbPath = dbURL.path
         queue.sync {
-            openDatabase(path: dbURL.path)
+            openDatabase(path: dbPath)
             createTables()
         }
     }
@@ -28,7 +30,7 @@ final class ConversationStore: @unchecked Sendable {
         }
     }
 
-    func saveConversation(content: String, siteName: String, url: String, createdAt: UInt64, embedding: [Float]?) async throws -> SavedConversation {
+    func saveConversation(tabId: String, content: String, markdown: String, siteName: String, url: String, createdAt: UInt64, embedding: [Float]?) async throws -> SavedConversation {
         try await withCheckedThrowingContinuation { continuation in
             queue.async {
                 do {
@@ -36,27 +38,40 @@ final class ConversationStore: @unchecked Sendable {
                         throw ConversationStoreError(message: "Database not available")
                     }
 
-                    let insertSQL = "INSERT INTO conversations (site_name, url, content, created_at) VALUES (?, ?, ?, ?);"
+                    let insertSQL = """
+                    INSERT INTO conversations (tab_id, site_name, url, content, markdown, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(tab_id) DO UPDATE SET
+                        site_name=excluded.site_name,
+                        url=excluded.url,
+                        content=excluded.content,
+                        markdown=excluded.markdown,
+                        created_at=excluded.created_at;
+                    """
                     var statement: OpaquePointer?
                     guard sqlite3_prepare_v2(db, insertSQL, -1, &statement, nil) == SQLITE_OK else {
                         throw ConversationStoreError(message: "Failed to prepare insert")
                     }
                     defer { sqlite3_finalize(statement) }
 
-                    sqlite3_bind_text(statement, 1, siteName, -1, SQLITE_TRANSIENT)
-                    sqlite3_bind_text(statement, 2, url, -1, SQLITE_TRANSIENT)
-                    sqlite3_bind_text(statement, 3, content, -1, SQLITE_TRANSIENT)
-                    sqlite3_bind_int64(statement, 4, Int64(createdAt))
+                    sqlite3_bind_text(statement, 1, tabId, -1, SQLITE_TRANSIENT)
+                    sqlite3_bind_text(statement, 2, siteName, -1, SQLITE_TRANSIENT)
+                    sqlite3_bind_text(statement, 3, url, -1, SQLITE_TRANSIENT)
+                    sqlite3_bind_text(statement, 4, content, -1, SQLITE_TRANSIENT)
+                    sqlite3_bind_text(statement, 5, markdown, -1, SQLITE_TRANSIENT)
+                    sqlite3_bind_int64(statement, 6, Int64(createdAt))
 
                     guard sqlite3_step(statement) == SQLITE_DONE else {
                         throw ConversationStoreError(message: "Failed to insert conversation")
                     }
 
-                    let rowId = sqlite3_last_insert_rowid(db)
-                    try self.insertFTSRow(db: db, rowId: rowId, content: content)
+                    let rowId = try self.fetchConversationId(db: db, tabId: tabId)
+                    try self.refreshFTSRow(db: db, rowId: rowId, content: content)
 
                     if let embedding {
                         try self.insertEmbedding(db: db, conversationId: rowId, embedding: embedding)
+                    } else {
+                        self.removeEmbedding(db: db, conversationId: rowId)
                     }
 
                     let saved = SavedConversation(
@@ -64,6 +79,7 @@ final class ConversationStore: @unchecked Sendable {
                         siteName: siteName,
                         url: url,
                         content: content,
+                        markdown: markdown,
                         createdAt: createdAt
                     )
                     continuation.resume(returning: saved)
@@ -95,8 +111,11 @@ final class ConversationStore: @unchecked Sendable {
                     """
 
                     var statement: OpaquePointer?
-                    guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
-                        throw ConversationStoreError(message: "Failed to prepare search")
+                    if sqlite3_prepare_v2(db, sql, -1, &statement, nil) != SQLITE_OK {
+                        try self.rebuildFTSIndex(db: db)
+                        if sqlite3_prepare_v2(db, sql, -1, &statement, nil) != SQLITE_OK {
+                            throw ConversationStoreError(message: "Failed to prepare search")
+                        }
                     }
                     defer { sqlite3_finalize(statement) }
 
@@ -225,25 +244,50 @@ final class ConversationStore: @unchecked Sendable {
                     }
                     if sqlite3_exec(db, "BEGIN IMMEDIATE;", nil, nil, nil) != SQLITE_OK {
                         let message = String(cString: sqlite3_errmsg(db))
+                        if self.isDatabaseCorrupt(db: db) {
+                            self.resetDatabase()
+                            continuation.resume()
+                            return
+                        }
                         throw ConversationStoreError(message: "Failed to begin transaction: \(message)")
                     }
                     if sqlite3_exec(db, "DELETE FROM conversation_embeddings;", nil, nil, nil) != SQLITE_OK {
                         let message = String(cString: sqlite3_errmsg(db))
+                        if self.isDatabaseCorrupt(db: db) {
+                            self.resetDatabase()
+                            continuation.resume()
+                            return
+                        }
                         _ = sqlite3_exec(db, "ROLLBACK;", nil, nil, nil)
                         throw ConversationStoreError(message: "Failed to clear embeddings: \(message)")
                     }
                     if sqlite3_exec(db, "DELETE FROM conversations_fts;", nil, nil, nil) != SQLITE_OK {
                         let message = String(cString: sqlite3_errmsg(db))
+                        if self.isDatabaseCorrupt(db: db) {
+                            self.resetDatabase()
+                            continuation.resume()
+                            return
+                        }
                         _ = sqlite3_exec(db, "ROLLBACK;", nil, nil, nil)
                         throw ConversationStoreError(message: "Failed to clear search index: \(message)")
                     }
                     if sqlite3_exec(db, "DELETE FROM conversations;", nil, nil, nil) != SQLITE_OK {
                         let message = String(cString: sqlite3_errmsg(db))
+                        if self.isDatabaseCorrupt(db: db) {
+                            self.resetDatabase()
+                            continuation.resume()
+                            return
+                        }
                         _ = sqlite3_exec(db, "ROLLBACK;", nil, nil, nil)
                         throw ConversationStoreError(message: "Failed to clear conversations: \(message)")
                     }
                     if sqlite3_exec(db, "COMMIT;", nil, nil, nil) != SQLITE_OK {
                         let message = String(cString: sqlite3_errmsg(db))
+                        if self.isDatabaseCorrupt(db: db) {
+                            self.resetDatabase()
+                            continuation.resume()
+                            return
+                        }
                         _ = sqlite3_exec(db, "ROLLBACK;", nil, nil, nil)
                         throw ConversationStoreError(message: "Failed to commit: \(message)")
                     }
@@ -263,23 +307,39 @@ final class ConversationStore: @unchecked Sendable {
         _ = sqlite3_exec(db, "PRAGMA journal_mode=WAL;", nil, nil, nil)
     }
 
+    private func resetDatabase() {
+        if let db {
+            sqlite3_close(db)
+        }
+        db = nil
+        try? FileManager.default.removeItem(atPath: dbPath)
+        openDatabase(path: dbPath)
+        createTables()
+    }
+
+    private func isDatabaseCorrupt(db: OpaquePointer?) -> Bool {
+        guard let db else { return false }
+        let code = sqlite3_errcode(db)
+        if code == SQLITE_CORRUPT || code == SQLITE_NOTADB {
+            return true
+        }
+        let message = String(cString: sqlite3_errmsg(db))
+        return message.localizedCaseInsensitiveContains("malformed")
+    }
+
     private func createTables() {
         let createConversations = """
         CREATE TABLE IF NOT EXISTS conversations (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tab_id TEXT,
             site_name TEXT NOT NULL,
             url TEXT NOT NULL,
             content TEXT NOT NULL,
+            markdown TEXT,
             created_at INTEGER NOT NULL
         );
         """
-        let createFts = """
-        CREATE VIRTUAL TABLE IF NOT EXISTS conversations_fts USING fts5(
-            content,
-            content='conversations',
-            content_rowid='id'
-        );
-        """
+        guard let db else { return }
         let createEmbeddings = """
         CREATE TABLE IF NOT EXISTS conversation_embeddings (
             conversation_id INTEGER PRIMARY KEY,
@@ -288,8 +348,38 @@ final class ConversationStore: @unchecked Sendable {
         );
         """
         _ = sqlite3_exec(db, createConversations, nil, nil, nil)
-        _ = sqlite3_exec(db, createFts, nil, nil, nil)
+        createFTSTable(db: db)
         _ = sqlite3_exec(db, createEmbeddings, nil, nil, nil)
+        migrateSchemaIfNeeded()
+    }
+
+    private func migrateSchemaIfNeeded() {
+        ensureColumn(table: "conversations", column: "tab_id", definition: "TEXT")
+        ensureColumn(table: "conversations", column: "markdown", definition: "TEXT")
+        _ = sqlite3_exec(db, "CREATE UNIQUE INDEX IF NOT EXISTS conversations_tab_id_idx ON conversations (tab_id);", nil, nil, nil)
+    }
+
+    private func ensureColumn(table: String, column: String, definition: String) {
+        guard let db, !columnExists(table: table, column: column) else { return }
+        let sql = "ALTER TABLE \(table) ADD COLUMN \(column) \(definition);"
+        _ = sqlite3_exec(db, sql, nil, nil, nil)
+    }
+
+    private func columnExists(table: String, column: String) -> Bool {
+        guard let db else { return false }
+        let sql = "PRAGMA table_info(\(table));"
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            return false
+        }
+        defer { sqlite3_finalize(statement) }
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let name = sqlite3_column_text(statement, 1) else { continue }
+            if String(cString: name) == column {
+                return true
+            }
+        }
+        return false
     }
 
     private func insertFTSRow(db: OpaquePointer, rowId: Int64, content: String) throws {
@@ -305,6 +395,55 @@ final class ConversationStore: @unchecked Sendable {
         guard sqlite3_step(statement) == SQLITE_DONE else {
             throw ConversationStoreError(message: "Failed to insert FTS row")
         }
+    }
+
+    private func refreshFTSRow(db: OpaquePointer, rowId: Int64, content: String) throws {
+        if !deleteFTSRow(db: db, rowId: rowId) {
+            try rebuildFTSIndex(db: db)
+            _ = deleteFTSRow(db: db, rowId: rowId)
+        }
+
+        do {
+            try insertFTSRow(db: db, rowId: rowId, content: content)
+        } catch {
+            try rebuildFTSIndex(db: db)
+            try insertFTSRow(db: db, rowId: rowId, content: content)
+        }
+    }
+
+    private func deleteFTSRow(db: OpaquePointer, rowId: Int64) -> Bool {
+        let sql = "DELETE FROM conversations_fts WHERE rowid = ?;"
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            return false
+        }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_int64(statement, 1, rowId)
+        return sqlite3_step(statement) == SQLITE_DONE
+    }
+
+    private func rebuildFTSIndex(db: OpaquePointer) throws {
+        let rebuildSQL = "INSERT INTO conversations_fts(conversations_fts) VALUES('rebuild');"
+        if sqlite3_exec(db, rebuildSQL, nil, nil, nil) == SQLITE_OK {
+            return
+        }
+        _ = sqlite3_exec(db, "DROP TABLE IF EXISTS conversations_fts;", nil, nil, nil)
+        createFTSTable(db: db)
+        if sqlite3_exec(db, rebuildSQL, nil, nil, nil) != SQLITE_OK {
+            let message = String(cString: sqlite3_errmsg(db))
+            throw ConversationStoreError(message: "Failed to rebuild search index: \(message)")
+        }
+    }
+
+    private func createFTSTable(db: OpaquePointer) {
+        let createFts = """
+        CREATE VIRTUAL TABLE IF NOT EXISTS conversations_fts USING fts5(
+            content,
+            content='conversations',
+            content_rowid='id'
+        );
+        """
+        _ = sqlite3_exec(db, createFts, nil, nil, nil)
     }
 
     private func insertEmbedding(db: OpaquePointer, conversationId: Int64, embedding: [Float]) throws {
@@ -326,8 +465,33 @@ final class ConversationStore: @unchecked Sendable {
         }
     }
 
+    private func removeEmbedding(db: OpaquePointer, conversationId: Int64) {
+        let sql = "DELETE FROM conversation_embeddings WHERE conversation_id = ?;"
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            return
+        }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_int64(statement, 1, conversationId)
+        _ = sqlite3_step(statement)
+    }
+
+    private func fetchConversationId(db: OpaquePointer, tabId: String) throws -> Int64 {
+        let sql = "SELECT id FROM conversations WHERE tab_id = ?;"
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw ConversationStoreError(message: "Failed to read conversation id")
+        }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_text(statement, 1, tabId, -1, SQLITE_TRANSIENT)
+        guard sqlite3_step(statement) == SQLITE_ROW else {
+            throw ConversationStoreError(message: "Conversation id not found")
+        }
+        return sqlite3_column_int64(statement, 0)
+    }
+
     private func fetchConversation(db: OpaquePointer, id: Int64) -> SavedConversation? {
-        let sql = "SELECT id, site_name, url, content, created_at FROM conversations WHERE id = ?;"
+        let sql = "SELECT id, site_name, url, content, markdown, created_at FROM conversations WHERE id = ?;"
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
             return nil
@@ -356,17 +520,17 @@ final class ConversationStore: @unchecked Sendable {
     private func readConversationRow(statement: OpaquePointer?) -> SavedConversation? {
         guard let statement else { return nil }
         let id = sqlite3_column_int64(statement, 0)
-        guard let siteName = sqlite3_column_text(statement, 1),
-              let url = sqlite3_column_text(statement, 2),
-              let content = sqlite3_column_text(statement, 3) else {
-            return nil
-        }
-        let createdAt = sqlite3_column_int64(statement, 4)
+        let siteName = readText(statement: statement, index: 1)
+        let url = readText(statement: statement, index: 2)
+        let content = readText(statement: statement, index: 3)
+        let markdown = readText(statement: statement, index: 4)
+        let createdAt = sqlite3_column_int64(statement, 5)
         return SavedConversation(
             id: id,
-            siteName: String(cString: siteName),
-            url: String(cString: url),
-            content: String(cString: content),
+            siteName: siteName,
+            url: url,
+            content: content,
+            markdown: markdown,
             createdAt: UInt64(createdAt)
         )
     }
@@ -374,20 +538,31 @@ final class ConversationStore: @unchecked Sendable {
     private func readPreviewRow(statement: OpaquePointer?) -> SavedConversationPreview? {
         guard let statement else { return nil }
         let id = sqlite3_column_int64(statement, 0)
-        guard let siteName = sqlite3_column_text(statement, 1),
-              let url = sqlite3_column_text(statement, 2),
-              let snippet = sqlite3_column_text(statement, 3) else {
-            return nil
-        }
+        let siteName = readText(statement: statement, index: 1)
+        let url = readText(statement: statement, index: 2)
+        let snippet = readText(statement: statement, index: 3)
         let createdAt = sqlite3_column_int64(statement, 4)
-        let trimmedSnippet = String(cString: snippet).trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedSnippet = snippet.trimmingCharacters(in: .whitespacesAndNewlines)
         return SavedConversationPreview(
             id: id,
-            siteName: String(cString: siteName),
-            url: String(cString: url),
+            siteName: siteName,
+            url: url,
             snippet: trimmedSnippet,
             createdAt: UInt64(createdAt)
         )
+    }
+
+    private func readText(statement: OpaquePointer?, index: Int32) -> String {
+        guard let statement else { return "" }
+        guard let cString = sqlite3_column_text(statement, index) else { return "" }
+        let cChar = UnsafeRawPointer(cString).assumingMemoryBound(to: CChar.self)
+        if let valid = String(validatingCString: cChar) {
+            return valid
+        }
+        let length = sqlite3_column_bytes(statement, index)
+        guard length > 0 else { return "" }
+        let data = Data(bytes: cString, count: Int(length))
+        return String(decoding: data, as: UTF8.self)
     }
 
     private func searchableContent(from text: String) -> String {

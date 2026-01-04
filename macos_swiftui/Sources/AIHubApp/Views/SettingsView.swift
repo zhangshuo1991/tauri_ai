@@ -289,6 +289,30 @@ struct SettingsView: View {
     private var advancedTab: some View {
         Form {
             Section {
+                Toggle(isOn: $draft.toolbarAutoHide) {
+                    Label(model.t("settings.toolbarAutoHide"), systemImage: "rectangle.topthird.inset.filled")
+                }
+
+                Toggle(isOn: $draft.autoSaveEnabled) {
+                    Label(model.t("settings.autoSaveEnabled"), systemImage: "clock.arrow.circlepath")
+                }
+
+                HStack {
+                    Label(model.t("settings.autoSaveInterval"), systemImage: "timer")
+                    Spacer()
+                    Slider(value: $draft.autoSaveInterval, in: 10...300, step: 5)
+                        .frame(width: 160)
+                    Text(String(format: model.t("settings.autoSaveIntervalValue"), Int(draft.autoSaveInterval)))
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundColor(.secondary)
+                        .frame(width: 48, alignment: .trailing)
+                }
+                .disabled(!draft.autoSaveEnabled)
+            } header: {
+                Text(model.t("settings.section.behavior"))
+            }
+
+            Section {
                 VStack(alignment: .leading, spacing: 12) {
                     Text(model.t("settings.resetNavContent"))
                         .font(.subheadline)
@@ -332,6 +356,9 @@ struct SettingsView: View {
         draft.sidebarWidth = model.config.sidebarWidth > minSidebarWidth ? model.config.sidebarWidth : model.sidebarExpandedWidth
         draft.sidebarIconSize = model.config.sidebarIconSize
         draft.sidebarTextSize = model.config.sidebarTextSize
+        draft.toolbarAutoHide = model.config.toolbarAutoHide
+        draft.autoSaveEnabled = model.config.autoSaveEnabled
+        draft.autoSaveInterval = model.config.autoSaveInterval
         draft.language = SupportedLanguage.fromConfig(model.config.language)
         draft.aiApiBaseUrl = model.config.aiApiBaseUrl
         draft.aiApiModel = model.config.aiApiModel
@@ -349,6 +376,9 @@ struct SettingsView: View {
             nextWidth != model.config.sidebarWidth ||
             draft.sidebarIconSize != model.config.sidebarIconSize ||
             draft.sidebarTextSize != model.config.sidebarTextSize ||
+            draft.toolbarAutoHide != model.config.toolbarAutoHide ||
+            draft.autoSaveEnabled != model.config.autoSaveEnabled ||
+            draft.autoSaveInterval != model.config.autoSaveInterval ||
             draft.aiApiBaseUrl.trimmingCharacters(in: .whitespacesAndNewlines) != model.config.aiApiBaseUrl ||
             draft.aiApiModel.trimmingCharacters(in: .whitespacesAndNewlines) != model.config.aiApiModel ||
             draft.aiEmbeddingModel.trimmingCharacters(in: .whitespacesAndNewlines) != model.config.aiEmbeddingModel ||
@@ -364,6 +394,9 @@ struct SettingsView: View {
         let width = draft.sidebarExpanded ? max(minSidebarWidth, draft.sidebarWidth) : minSidebarWidth
         model.updateSidebarWidth(width)
         model.updateSidebarItemSizes(iconSize: draft.sidebarIconSize, textSize: draft.sidebarTextSize)
+
+        model.setToolbarAutoHide(draft.toolbarAutoHide)
+        model.updateAutoSaveSettings(enabled: draft.autoSaveEnabled, interval: draft.autoSaveInterval)
 
         model.setLanguage(draft.language)
         model.updateAiSettings(
@@ -423,6 +456,9 @@ private struct SettingsDraft {
     var sidebarWidth: Double = 180
     var sidebarIconSize: Double = 28
     var sidebarTextSize: Double = 15
+    var toolbarAutoHide = true
+    var autoSaveEnabled = true
+    var autoSaveInterval: Double = 30
     var language: SupportedLanguage = .zhCN
     var aiApiBaseUrl = ""
     var aiApiModel = ""

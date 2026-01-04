@@ -29,6 +29,7 @@ final class AppModel: ObservableObject {
     let webViewManager = WebViewManager()
 
     private var cancellables = Set<AnyCancellable>()
+    private var autoSaveTask: Task<Void, Never>?
     private let storage = Storage.shared
     private let conversationStore = ConversationStore.shared
 
@@ -68,7 +69,10 @@ final class AppModel: ObservableObject {
             }
             .store(in: &cancellables)
 
-        Task { await loadRecentSavedConversations() }
+        Task {
+            await loadRecentSavedConversations()
+            configureAutoSave()
+        }
     }
 
     func t(_ key: String) -> String {
@@ -106,6 +110,19 @@ final class AppModel: ObservableObject {
             $0.sidebarIconSize = min(30, max(15, iconSize))
             $0.sidebarTextSize = min(30, max(15, textSize))
         }
+    }
+
+    func setToolbarAutoHide(_ enabled: Bool) {
+        updateConfig { $0.toolbarAutoHide = enabled }
+    }
+
+    func updateAutoSaveSettings(enabled: Bool, interval: Double) {
+        let clampedInterval = min(300, max(10, interval))
+        updateConfig {
+            $0.autoSaveEnabled = enabled
+            $0.autoSaveInterval = clampedInterval
+        }
+        configureAutoSave()
     }
 
     func updateAiSettings(baseUrl: String, model: String, apiKey: String, clearKey: Bool, embeddingModel: String) {
@@ -589,6 +606,10 @@ final class AppModel: ObservableObject {
         if sanitized.sidebarTextSize != textSize {
             sanitized.sidebarTextSize = textSize
         }
+        let autoSaveInterval = min(300, max(10, sanitized.autoSaveInterval))
+        if sanitized.autoSaveInterval != autoSaveInterval {
+            sanitized.autoSaveInterval = autoSaveInterval
+        }
         if sanitized.aiApiBaseUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             sanitized.aiApiBaseUrl = "https://api.openai.com/v1"
         }
@@ -673,19 +694,86 @@ final class AppModel: ObservableObject {
         return try await webViewManager.evaluateJavaScript(tabId: tabId, script: script)
     }
 
+    private func extractMarkdown(from tabId: String) async throws -> String {
+        let script = """
+        (() => {
+          const blockTags = new Set(["p","div","section","article","li","ul","ol","br","h1","h2","h3","h4","h5","h6","tr"]);
+          const isHighlight = (el) => {
+            const tag = el.tagName ? el.tagName.toLowerCase() : "";
+            if (tag === "mark") return true;
+            const cls = (el.getAttribute("class") || "").toLowerCase();
+            if (cls.includes("highlight")) return true;
+            const style = (el.getAttribute("style") || "").toLowerCase();
+            if (style.includes("background")) return true;
+            return false;
+          };
+          const walk = (node) => {
+            if (!node) return "";
+            if (node.nodeType === Node.TEXT_NODE) {
+              return node.nodeValue || "";
+            }
+            if (node.nodeType !== Node.ELEMENT_NODE) {
+              return "";
+            }
+            const el = node;
+            const tag = el.tagName.toLowerCase();
+            if (tag === "br") return "\\n";
+            if (tag === "pre") {
+              const text = el.innerText || "";
+              return "\\n\\n```\\n" + text + "\\n```\\n\\n";
+            }
+            if (tag === "code") {
+              if (el.closest("pre")) return "";
+              const text = el.innerText || "";
+              return "`" + text + "`";
+            }
+            let content = "";
+            for (const child of el.childNodes) {
+              content += walk(child);
+            }
+            if (isHighlight(el)) {
+              content = `==${content}==`;
+            }
+            if (blockTags.has(tag)) {
+              return content + "\\n";
+            }
+            return content;
+          };
+          const body = document.body;
+          if (!body) return "";
+          return walk(body).replace(/\\n{3,}/g, "\\n\\n").trim();
+        })();
+        """
+        return try await webViewManager.evaluateJavaScript(tabId: tabId, script: script)
+    }
+
     func saveCurrentConversation() async {
         let tabId = activeTabId.isEmpty ? currentSiteId : activeTabId
         guard !tabId.isEmpty else {
             errorMessage = t("search.noActiveTab")
             return
         }
+        await saveConversation(tabId: tabId, showToast: true)
+    }
 
+    private func saveConversation(tabId: String, showToast: Bool) async {
         do {
             let text = try await extractText(from: tabId)
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmed.isEmpty {
-                errorMessage = t("search.noVisibleContent")
+                if showToast {
+                    errorMessage = t("search.noVisibleContent")
+                }
                 return
+            }
+
+            let markdown: String
+            do {
+                let extracted = try await extractMarkdown(from: tabId)
+                let cleaned = extracted.trimmingCharacters(in: .whitespacesAndNewlines)
+                markdown = cleaned.isEmpty ? trimmed : cleaned
+            } catch {
+                markdown = trimmed
             }
 
             let siteId = siteIdForTab(tabId)
@@ -698,21 +786,45 @@ final class AppModel: ObservableObject {
                 do {
                     embedding = try await embeddingForText(trimmed, mode: currentSearchMode)
                 } catch {
-                    errorMessage = t("search.embeddingFailed")
+                    if showToast {
+                        errorMessage = t("search.embeddingFailed")
+                    }
                 }
             }
 
             _ = try await conversationStore.saveConversation(
+                tabId: tabId,
                 content: trimmed,
+                markdown: markdown,
                 siteName: siteName,
                 url: siteUrl,
                 createdAt: createdAt,
                 embedding: embedding
             )
             await loadRecentSavedConversations()
-            toastMessage = t("search.saveSuccess")
+            if showToast {
+                toastMessage = t("search.saveSuccess")
+            }
         } catch {
-            errorMessage = errorText(error)
+            if showToast {
+                errorMessage = errorText(error)
+            }
+        }
+    }
+
+    private func configureAutoSave() {
+        autoSaveTask?.cancel()
+        guard config.autoSaveEnabled else { return }
+        let interval = min(300, max(10, config.autoSaveInterval))
+        autoSaveTask = Task { [weak self] in
+            guard let self else { return }
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+                guard !Task.isCancelled else { return }
+                let tabId = self.activeTabId.isEmpty ? self.currentSiteId : self.activeTabId
+                guard !tabId.isEmpty else { continue }
+                await self.saveConversation(tabId: tabId, showToast: false)
+            }
         }
     }
 
