@@ -37,6 +37,7 @@ import {
 import AddSiteModal from "./components/modals/AddSiteModal.vue";
 import SiteSettingsModal from "./components/modals/SiteSettingsModal.vue";
 import SummaryModal from "./components/modals/SummaryModal.vue";
+import HomePage from "./components/HomePage.vue";
 import Sidebar from "./components/Sidebar.vue";
 import TopBar from "./components/TopBar.vue";
 import type { AiSite, AppConfig } from "./types";
@@ -79,6 +80,8 @@ const summaryText = ref("");
 const isSummarizing = ref(false);
 
 const topBarRef = ref<InstanceType<typeof TopBar> | null>(null);
+const showHome = ref(false);
+const homeVisible = computed(() => showHome.value || !currentView.value);
 
 // 事件监听器
 let unlistenLoading: UnlistenFn | null = null;
@@ -215,6 +218,7 @@ async function switchView(siteId: string) {
   if (loading.value) return;
 
   try {
+    showHome.value = false;
     loading.value = true;
     console.log("切换到:", siteId);
     await invoke("switch_view", { siteId });
@@ -451,6 +455,15 @@ function openSettings() {
   showSettings.value = true;
 }
 
+function toggleHome() {
+  showHome.value = !homeVisible.value;
+}
+
+function openHomeSite(siteId: string) {
+  showHome.value = false;
+  void switchView(siteId);
+}
+
 const settingsDirty = computed(() => {
   const nextWidth = settingsDraft.sidebarExpanded
     ? normalizeSidebarWidth(settingsDraft.sidebarWidth)
@@ -567,6 +580,7 @@ async function resetNavigation() {
 }
 
 const isOverlayOpen = computed(() => showSettings.value || showAddDialog.value || showSiteSettings.value || showSummaryModal.value);
+const shouldShowWebview = computed(() => !isOverlayOpen.value && !homeVisible.value);
 
 const pinnedSet = computed(() => new Set(pinnedSiteIds.value));
 const query = computed(() => siteSearch.value.trim().toLowerCase());
@@ -594,6 +608,18 @@ const allRecentSites = computed(() =>
 const recentSitesShown = computed(() => allRecentSites.value.slice(0, 5));
 const recentShownSet = computed(() => new Set(recentSitesShown.value.map((s) => s.id)));
 
+const homePinnedSites = computed(() =>
+  pinnedSiteIds.value
+    .map((id) => siteById.value.get(id))
+    .filter((s): s is AiSite => Boolean(s)),
+);
+const homeRecentSites = computed(() =>
+  recentSiteIds.value
+    .map((id) => siteById.value.get(id))
+    .filter((s): s is AiSite => Boolean(s))
+    .filter((s) => !pinnedSet.value.has(s.id)),
+);
+
 const unpinnedSites = computed(() =>
   sites.value
     .filter((s) => !pinnedSet.value.has(s.id))
@@ -604,9 +630,9 @@ const unpinnedSites = computed(() =>
 
 const showRecentSection = computed(() => !query.value && allRecentSites.value.length > 0);
 
-watch(isOverlayOpen, async (open) => {
+watch(shouldShowWebview, async (visible) => {
   try {
-    await invoke("set_active_view_visible", { visible: !open });
+    await invoke("set_active_view_visible", { visible });
   } catch (e) {
     console.error("切换子 Webview 显示失败:", e);
   }
@@ -724,21 +750,25 @@ onUnmounted(() => {
           ref="topBarRef"
           :sites="sites"
           :current-site-id="currentView"
+          :home-active="homeVisible"
           :summarizing="isSummarizing"
+          @home="toggleHome"
           @summarize="summarizeCurrentTab"
         />
 
     <!-- 加载指示器 -->
     <div v-if="loading" class="loading-bar" :style="{ left: sidebarWidth + 'px' }"></div>
 
-    <!-- 主内容区域（欢迎页面） -->
-    <main v-if="!currentView" class="content">
-      <div class="welcome-screen">
-        <div class="welcome-icon">🚀</div>
-        <h2>{{ t("app.welcomeTitle") }}</h2>
-        <p>{{ t("app.welcomeSubtitle") }}</p>
-      </div>
-    </main>
+    <!-- 主内容区域（首页） -->
+    <div v-if="homeVisible" class="content">
+      <home-page
+        :pinned-sites="homePinnedSites"
+        :recent-sites="homeRecentSites"
+        @add-site="openAddDialog"
+        @open-settings="openSettings"
+        @select-site="openHomeSite"
+      />
+    </div>
       </div>
 
     <add-site-modal v-model:show="showAddDialog" @submit="addSite" @error="showError" />
@@ -760,13 +790,30 @@ onUnmounted(() => {
           :bordered="false"
           size="large"
           :segmented="{ footer: 'soft' }"
-          :content-style="{ maxHeight: 'min(70vh, 620px)', overflow: 'auto', padding: '16px 22px 20px' }"
+          :content-style="{
+            maxHeight: 'min(70vh, 620px)',
+            overflow: 'auto',
+            padding: '16px 22px 20px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '14px',
+          }"
           :header-style="{ padding: '18px 22px 8px' }"
           :footer-style="{ padding: '12px 22px', borderTop: '1px solid var(--settings-border)' }"
           style="width: 640px; max-width: calc(100vw - 32px)"
           @close="showSettings = false"
         >
-          <n-tabs v-model:value="settingsTab" type="line" animated class="settings-tabs">
+          <div class="settings-hero">
+            <div class="settings-hero-text">
+              <div class="settings-hero-label">{{ t("settings.title") }}</div>
+              <div class="settings-hero-title">{{ t("settings.subtitle") }}</div>
+            </div>
+            <div class="settings-hero-chip">
+              <span>{{ isDarkThemeDraft ? t("sidebar.dark") : t("sidebar.light") }}</span>
+            </div>
+          </div>
+
+          <n-tabs v-model:value="settingsTab" type="segment" size="small" animated class="settings-tabs">
             <n-tab-pane name="appearance" :tab="t('settings.tabs.appearance')">
               <div class="settings-panel">
                 <n-form label-placement="left" label-width="120" size="medium">
@@ -968,29 +1015,9 @@ html, body {
   position: relative;
   background: var(--bg-dark);
   display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-/* 欢迎屏幕 */
-.welcome-screen {
-  text-align: center;
-  color: var(--text-secondary);
-}
-
-.welcome-icon {
-  font-size: 64px;
-  margin-bottom: 16px;
-}
-
-.welcome-screen h2 {
-  font-size: 24px;
-  margin-bottom: 8px;
-  color: var(--text-primary);
-}
-
-.welcome-screen p {
-  font-size: 14px;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
 }
 
 /* 加载条 */
@@ -1014,21 +1041,87 @@ html, body {
   background: var(--settings-surface);
   border: 1px solid var(--settings-border);
   box-shadow: var(--settings-shadow);
+  border-radius: 18px;
+  position: relative;
+  overflow: hidden;
+}
+
+.settings-card::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, #5aa9e6, #9ad1ff, #5aa9e6);
+}
+
+.settings-hero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--settings-surface) 75%, transparent);
+  border: 1px solid var(--settings-border);
+}
+
+.settings-hero-text {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.settings-hero-label {
+  font-size: 11px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--settings-muted);
+}
+
+.settings-hero-title {
+  font-size: 16px;
+  color: var(--text-primary);
 }
 
 .settings-panel {
-  background: var(--settings-surface);
+  background: color-mix(in srgb, var(--settings-surface) 88%, transparent);
   border: 1px solid var(--settings-border);
-  border-radius: 12px;
-  padding: 16px;
+  border-radius: 14px;
+  padding: 18px;
+}
+
+.settings-hero-chip {
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--accent-color) 20%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-color) 45%, var(--settings-border));
 }
 
 .settings-tabs :deep(.n-tabs-nav) {
-  margin-bottom: 14px;
+  margin-bottom: 10px;
+  padding: 6px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--bg-dark) 55%, var(--settings-surface));
+  border: 1px solid var(--settings-border);
 }
 
 .settings-tabs :deep(.n-tabs-tab) {
-  font-size: 13px;
+  font-size: 12px;
+  padding: 6px 12px;
+  border-radius: 10px;
+  color: var(--settings-muted);
+}
+
+.settings-tabs :deep(.n-tabs-tab--active) {
+  color: var(--text-primary);
+}
+
+.settings-tabs :deep(.n-tabs-tab:hover) {
+  color: var(--text-primary);
 }
 
 .settings-footer {

@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { createDiscreteApi, NButton, NIcon, NSelect, NSlider, NSwitch } from "naive-ui";
-import { AddOutline, CloseOutline, DocumentTextOutline, GridOutline } from "@vicons/ionicons5";
+import { AddOutline, CloseOutline, DocumentTextOutline, GridOutline, HomeOutline } from "@vicons/ionicons5";
 
 import type { AiSite } from "../types";
 import { t } from "../i18n";
@@ -19,10 +19,12 @@ type TabsStateResponse = {
 const props = defineProps<{
   sites: AiSite[];
   currentSiteId: string;
+  homeActive: boolean;
   summarizing?: boolean;
 }>();
 
 const emit = defineEmits<{
+  (e: "home"): void;
   (e: "summarize"): void;
 }>();
 
@@ -63,6 +65,7 @@ const visibleTabIds = computed(() => {
 });
 
 const activeSelectCount = ref(0);
+const shouldShowView = computed(() => activeSelectCount.value <= 0 && !props.homeActive);
 
 async function refresh() {
   tabsState.value = await invoke<TabsStateResponse>("get_tabs_state");
@@ -110,10 +113,10 @@ function onSelectShow(show: boolean) {
 }
 
 watch(
-  () => activeSelectCount.value,
-  async (count) => {
+  () => shouldShowView.value,
+  async (visible) => {
     try {
-      await invoke("set_active_view_visible", { visible: count <= 0 });
+      await invoke("set_active_view_visible", { visible });
     } catch {
       // ignore
     }
@@ -196,6 +199,10 @@ onMounted(() => {
 <template>
   <header class="topbar">
     <div class="left">
+      <button class="home-btn" :class="{ active: homeActive }" @click="emit('home')">
+        <n-icon size="16"><home-outline /></n-icon>
+        <span>{{ t("top.home") }}</span>
+      </button>
       <n-button size="small" :disabled="busy || !currentSiteId" @click="createTabForCurrentSite">
         <template #icon>
           <n-icon>
@@ -294,6 +301,28 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+.home-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.home-btn.active {
+  border-color: var(--accent-color);
+  background: var(--active-bg);
+}
+
+.home-btn:hover {
+  border-color: color-mix(in srgb, var(--border-color) 60%, var(--accent-color));
 }
 
 .split {
