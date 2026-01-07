@@ -1359,7 +1359,7 @@ fn set_active_tab_id(webview: tauri::Webview, tab_id: String) -> Result<(), Stri
     if tab_id.trim().is_empty() {
         return Ok(());
     }
-    *ACTIVE_TAB_ID.lock().unwrap() = tab_id;
+    *ACTIVE_TAB_ID.lock().unwrap() = tab_id.clone();
     if let Ok(site_id) = get_tab_site_id(&tab_id) {
         update_last_active(&tab_id, &site_id);
     }
@@ -2387,6 +2387,7 @@ pub fn run() {
         .setup(|app| {
             // 监听主窗口事件
             let app_handle = app.handle().clone();
+            let app_handle_for_window = app_handle.clone();
 
             let window = if let Some(main_window) = app.get_webview_window("main") {
                 Some(main_window.as_ref().window().clone())
@@ -2402,14 +2403,14 @@ pub fn run() {
                                 return;
                             }
                             // 窗口大小改变，更新所有 Webview
-                            let _ = resize_webviews_bounds_only(app_handle.clone());
+                            let _ = resize_webviews_bounds_only(app_handle_for_window.clone());
                         }
                         tauri::WindowEvent::CloseRequested { .. } => {
                             // 关闭窗口时清理所有 Webview
                             let views = CREATED_VIEWS.lock().unwrap().clone();
                             for (site_id, _) in views {
                                 let label = format!("ai_{}", site_id);
-                                if let Some(wv) = app_handle.get_webview(&label) {
+                                if let Some(wv) = app_handle_for_window.get_webview(&label) {
                                     let _ = wv.close();
                                 }
                             }
