@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import Foundation
 import NaturalLanguage
@@ -25,6 +26,10 @@ final class AppModel: ObservableObject {
     @Published var loading = false
     @Published var savedSearchResults: [SavedConversationPreview] = []
     @Published private(set) var recentSavedConversations: [SavedConversationPreview] = []
+    @Published private(set) var historyItems: [SavedConversationPreview] = []
+    @Published private(set) var historyTotalCount: Int = 0
+    @Published private(set) var historyLoading = false
+    @Published private(set) var historyHasMore = false
 
     let webViewManager = WebViewManager()
 
@@ -32,6 +37,8 @@ final class AppModel: ObservableObject {
     private var autoSaveTask: Task<Void, Never>?
     private let storage = Storage.shared
     private let conversationStore = ConversationStore.shared
+    private var historyOffset: Int = 0
+    private let historyPageSize = 40
 
     init() {
         var loaded = storage.loadConfig()
@@ -297,6 +304,8 @@ final class AppModel: ObservableObject {
 
     func switchToTab(_ tabId: String) {
         guard let siteId = siteIdForTab(tabId) else { return }
+        let previous = activeTabId
+        let existed = webViewManager.hasWebView(tabId: tabId)
         layoutMode = .single
         leftTabId = nil
         rightTabId = nil
@@ -305,9 +314,14 @@ final class AppModel: ObservableObject {
         ensureTabExists(tabId: tabId, siteId: siteId)
         updateRecentSite(siteId)
         updateLastActive(tabId: tabId, siteId: siteId)
+        if existed && previous != tabId {
+            webViewManager.refreshIfReady(tabId: tabId)
+        }
     }
 
     func switchView(_ siteId: String) {
+        let previous = activeTabId
+        let existed = webViewManager.hasWebView(tabId: siteId)
         layoutMode = .single
         leftTabId = nil
         rightTabId = nil
@@ -316,6 +330,22 @@ final class AppModel: ObservableObject {
         ensureTabExists(tabId: siteId, siteId: siteId)
         updateRecentSite(siteId)
         updateLastActive(tabId: siteId, siteId: siteId)
+        if existed && previous != siteId {
+            webViewManager.refreshIfReady(tabId: siteId)
+        }
+    }
+
+    func refreshVisibleTabs() {
+        let tabIds: [String]
+        if layoutMode == .split {
+            tabIds = [leftTabId, rightTabId].compactMap { $0 }
+        } else {
+            let active = activeTabId.isEmpty ? currentSiteId : activeTabId
+            tabIds = active.isEmpty ? [] : [active]
+        }
+        for tabId in tabIds {
+            webViewManager.refreshIfReady(tabId: tabId)
+        }
     }
 
     func setSplitEnabled(_ enabled: Bool) throws {
@@ -1035,6 +1065,119 @@ final class AppModel: ObservableObject {
         recentSavedConversations = []
     }
 
+    func refreshHistory(filter: HistoryFilter) async {
+        historyLoading = true
+        historyOffset = 0
+        historyItems = []
+        historyTotalCount = 0
+        historyHasMore = false
+        do {
+            let range = historyTimeRange(for: filter)
+            historyTotalCount = try await conversationStore.countHistory(
+                keyword: filter.keyword,
+                siteName: filter.siteName,
+                startTime: range.start,
+                endTime: range.end,
+                codeOnly: filter.codeOnly
+            )
+            let page = try await conversationStore.listHistory(
+                keyword: filter.keyword,
+                siteName: filter.siteName,
+                startTime: range.start,
+                endTime: range.end,
+                codeOnly: filter.codeOnly,
+                limit: historyPageSize,
+                offset: 0
+            )
+            historyItems = page
+            historyOffset = page.count
+            historyHasMore = historyOffset < historyTotalCount
+        } catch {
+            errorMessage = errorText(error)
+        }
+        historyLoading = false
+    }
+
+    func loadMoreHistory(filter: HistoryFilter) async {
+        guard !historyLoading, historyHasMore else { return }
+        historyLoading = true
+        do {
+            let range = historyTimeRange(for: filter)
+            let page = try await conversationStore.listHistory(
+                keyword: filter.keyword,
+                siteName: filter.siteName,
+                startTime: range.start,
+                endTime: range.end,
+                codeOnly: filter.codeOnly,
+                limit: historyPageSize,
+                offset: historyOffset
+            )
+            historyItems.append(contentsOf: page)
+            historyOffset += page.count
+            historyHasMore = historyOffset < historyTotalCount
+        } catch {
+            errorMessage = errorText(error)
+        }
+        historyLoading = false
+    }
+
+    func fetchHistoryConversation(id: Int64) async throws -> SavedConversation? {
+        try await conversationStore.fetchConversation(id: id)
+    }
+
+    func copyHistory(ids: [Int64]) async {
+        do {
+            let conversations = try await conversationStore.fetchConversations(ids: ids)
+            let body = conversations.map { exportBody(for: $0) }.joined(separator: "\n\n---\n\n")
+            guard !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+            let pasteboard = NSPasteboard.general
+            pasteboard.clearContents()
+            if pasteboard.setString(body, forType: .string) {
+                toastMessage = t("history.copySuccess")
+            } else {
+                errorMessage = t("history.copyFail")
+            }
+        } catch {
+            errorMessage = errorText(error)
+        }
+    }
+
+    func exportHistory(ids: [Int64]) async {
+        do {
+            let conversations = try await conversationStore.fetchConversations(ids: ids)
+            guard !conversations.isEmpty else { return }
+            let panel = NSOpenPanel()
+            panel.canChooseDirectories = true
+            panel.canChooseFiles = false
+            panel.allowsMultipleSelection = false
+            panel.prompt = t("history.exportConfirm")
+            if panel.runModal() != .OK {
+                return
+            }
+            guard let folder = panel.url else { return }
+            for conversation in conversations {
+                let fileName = exportFileName(for: conversation)
+                let fileURL = folder.appendingPathComponent(fileName)
+                let content = exportBody(for: conversation)
+                try content.write(to: fileURL, atomically: true, encoding: .utf8)
+            }
+            toastMessage = t("history.exportSuccess")
+        } catch {
+            errorMessage = errorText(error)
+        }
+    }
+
+    func deleteHistory(ids: [Int64], filter: HistoryFilter) async {
+        do {
+            try await conversationStore.deleteConversations(ids: ids)
+            await loadRecentSavedConversations()
+            await refreshHistory(filter: filter)
+            toastMessage = t("history.deleteSuccess")
+        } catch {
+            errorMessage = errorText(error)
+        }
+    }
+
     private func summarizeText(_ text: String, siteId: String?) async throws -> String {
         let trimmedKey = config.aiApiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedModel = config.aiApiModel.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1180,6 +1323,82 @@ final class AppModel: ObservableObject {
     private func errorText(_ error: Error) -> String {
         (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
     }
+
+    private func historyTimeRange(for filter: HistoryFilter) -> (start: UInt64?, end: UInt64?) {
+        let calendar = Calendar.current
+        let now = Date()
+        var startDate: Date?
+        var endDate: Date?
+
+        switch filter.timePreset {
+        case .all:
+            break
+        case .today:
+            startDate = calendar.startOfDay(for: now)
+            endDate = now
+        case .last7Days:
+            startDate = calendar.date(byAdding: .day, value: -7, to: now)
+            endDate = now
+        case .last30Days:
+            startDate = calendar.date(byAdding: .day, value: -30, to: now)
+            endDate = now
+        case .custom:
+            if let start = filter.customStart {
+                startDate = calendar.startOfDay(for: start)
+            }
+            if let end = filter.customEnd {
+                if let endOfDay = calendar.date(byAdding: DateComponents(day: 1, second: -1), to: calendar.startOfDay(for: end)) {
+                    endDate = endOfDay
+                } else {
+                    endDate = end
+                }
+            }
+        }
+
+        if let start = startDate, let end = endDate, end < start {
+            startDate = end
+            endDate = start
+        }
+
+        let startTime = startDate.map { UInt64($0.timeIntervalSince1970) }
+        let endTime = endDate.map { UInt64($0.timeIntervalSince1970) }
+        return (startTime, endTime)
+    }
+
+    private func exportBody(for conversation: SavedConversation) -> String {
+        let date = Date(timeIntervalSince1970: TimeInterval(conversation.createdAt))
+        let formatted = Self.historyDateFormatter.string(from: date)
+        let markdown = conversation.markdown.trimmingCharacters(in: .whitespacesAndNewlines)
+        let body = markdown.isEmpty ? conversation.content : markdown
+        let header = """
+## \(conversation.siteName)
+URL: \(conversation.url)
+Time: \(formatted)
+
+"""
+        return header + body
+    }
+
+    private func exportFileName(for conversation: SavedConversation) -> String {
+        let date = Date(timeIntervalSince1970: TimeInterval(conversation.createdAt))
+        let formatted = Self.fileDateFormatter.string(from: date)
+        let base = "\(conversation.siteName)_\(formatted)"
+        let sanitized = base.replacingOccurrences(of: "[\\\\/:*?\\\"<>|]", with: "_", options: .regularExpression)
+        return sanitized + ".md"
+    }
+
+    private static let historyDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter
+    }()
+
+    private static let fileDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd_HHmmss"
+        return formatter
+    }()
 
     private func firstSiteId(excluding siteId: String) -> String? {
         sitesOrdered().first { $0.id != siteId }?.id

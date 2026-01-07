@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct ContentView: View {
@@ -20,6 +21,7 @@ struct ContentView: View {
     @State private var isHoveringTopBarReveal = false
     @State private var topBarHideWorkItem: DispatchWorkItem?
     @State private var showHome = false
+    @State private var showHistory = false
 
     private let topBarRevealHeight: CGFloat = 6
     private let topBarHideDelay: TimeInterval = 1.2
@@ -27,6 +29,7 @@ struct ContentView: View {
     var body: some View {
         let overlayOpen = showSettings || showAddSite || showSiteSettings || showSavedConversation
         let homeVisible = showHome || model.currentSiteId.isEmpty
+        let historyVisible = showHistory
         let toolbarVisible = !model.config.toolbarAutoHide || showTopBar
 
         ZStack(alignment: .top) {
@@ -41,6 +44,7 @@ struct ContentView: View {
                         showSiteSettings = true
                     },
                     onSwitchSite: { siteId in
+                        showHistory = false
                         showHome = false
                         model.switchView(siteId)
                     },
@@ -64,6 +68,10 @@ struct ContentView: View {
                     },
                     onMoveUnpinned: { offsets, destination, current in
                         model.updateSiteOrder(fromOffsets: offsets, toOffset: destination, currentUnpinned: current)
+                    },
+                    onShowHistory: {
+                        showHome = false
+                        showHistory = true
                     }
                 )
                 .frame(width: model.sidebarWidth)
@@ -131,7 +139,7 @@ struct ContentView: View {
                     .animation(.easeInOut(duration: 0.18), value: showTopBar)
 
                     ZStack(alignment: .top) {
-                        if model.loading && !homeVisible {
+                        if model.loading && !homeVisible && !historyVisible {
                             ProgressView()
                                 .progressViewStyle(LinearProgressViewStyle())
                                 .frame(maxWidth: .infinity)
@@ -139,7 +147,10 @@ struct ContentView: View {
                                 .padding(.top, 6)
                         }
 
-                        if homeVisible {
+                        if historyVisible {
+                            HistoryView(onClose: { showHistory = false })
+                                .environmentObject(model)
+                        } else if homeVisible {
                             HomeView(
                                 recentConversations: model.recentSavedConversations,
                                 onAddSite: { showAddSite = true },
@@ -187,6 +198,9 @@ struct ContentView: View {
             }
             toastHideWorkItem = workItem
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.6, execute: workItem)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            model.refreshVisibleTabs()
         }
         .sheet(isPresented: $showSettings) {
             SettingsView(isPresented: $showSettings)

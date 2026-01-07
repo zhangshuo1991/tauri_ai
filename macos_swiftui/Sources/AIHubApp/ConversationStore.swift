@@ -220,8 +220,233 @@ final class ConversationStore: @unchecked Sendable {
         }
     }
 
-    func fetchConversation(id: Int64) async throws -> SavedConversation? {
+    func listHistory(
+        keyword: String,
+        siteName: String?,
+        startTime: UInt64?,
+        endTime: UInt64?,
+        codeOnly: Bool,
+        limit: Int,
+        offset: Int
+    ) async throws -> [SavedConversationPreview] {
+        let capped = min(max(1, limit), maxResults)
+        let clampedOffset = max(0, offset)
+        return try await withCheckedThrowingContinuation { continuation in
+            queue.async {
+                do {
+                    guard let db = self.db else {
+                        throw ConversationStoreError(message: "Database not available")
+                    }
+                    let query = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let parts = self.historyQueryParts(
+                        keyword: query,
+                        siteName: siteName,
+                        startTime: startTime,
+                        endTime: endTime,
+                        codeOnly: codeOnly
+                    )
+                    let sql: String
+                    if parts.useFTS {
+                        sql = """
+                        SELECT conversations.id, conversations.site_name, conversations.url,
+                               substr(conversations.content, 1, 200) AS snippet,
+                               conversations.created_at
+                        FROM conversations_fts
+                        JOIN conversations ON conversations_fts.rowid = conversations.id
+                        \(parts.whereClause)
+                        ORDER BY conversations.created_at DESC
+                        LIMIT ? OFFSET ?;
+                        """
+                    } else {
+                        sql = """
+                        SELECT id, site_name, url, substr(content, 1, 200) AS snippet, created_at
+                        FROM conversations
+                        \(parts.whereClause)
+                        ORDER BY created_at DESC
+                        LIMIT ? OFFSET ?;
+                        """
+                    }
+
+                    var statement: OpaquePointer?
+                    if sqlite3_prepare_v2(db, sql, -1, &statement, nil) != SQLITE_OK {
+                        if parts.useFTS {
+                            try self.rebuildFTSIndex(db: db)
+                            if sqlite3_prepare_v2(db, sql, -1, &statement, nil) != SQLITE_OK {
+                                throw ConversationStoreError(message: "Failed to prepare history list")
+                            }
+                        } else {
+                            throw ConversationStoreError(message: "Failed to prepare history list")
+                        }
+                    }
+                    defer { sqlite3_finalize(statement) }
+
+                    var bindings = parts.bindings
+                    bindings.append(.int(capped))
+                    bindings.append(.int(clampedOffset))
+                    self.bind(statement: statement, values: bindings)
+
+                    var results: [SavedConversationPreview] = []
+                    while sqlite3_step(statement) == SQLITE_ROW {
+                        if let preview = self.readPreviewRow(statement: statement) {
+                            results.append(preview)
+                        }
+                    }
+                    continuation.resume(returning: results)
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    func countHistory(
+        keyword: String,
+        siteName: String?,
+        startTime: UInt64?,
+        endTime: UInt64?,
+        codeOnly: Bool
+    ) async throws -> Int {
         try await withCheckedThrowingContinuation { continuation in
+            queue.async {
+                do {
+                    guard let db = self.db else {
+                        throw ConversationStoreError(message: "Database not available")
+                    }
+                    let query = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let parts = self.historyQueryParts(
+                        keyword: query,
+                        siteName: siteName,
+                        startTime: startTime,
+                        endTime: endTime,
+                        codeOnly: codeOnly
+                    )
+                    let sql: String
+                    if parts.useFTS {
+                        sql = """
+                        SELECT COUNT(*)
+                        FROM conversations_fts
+                        JOIN conversations ON conversations_fts.rowid = conversations.id
+                        \(parts.whereClause);
+                        """
+                    } else {
+                        sql = """
+                        SELECT COUNT(*)
+                        FROM conversations
+                        \(parts.whereClause);
+                        """
+                    }
+
+                    var statement: OpaquePointer?
+                    if sqlite3_prepare_v2(db, sql, -1, &statement, nil) != SQLITE_OK {
+                        if parts.useFTS {
+                            try self.rebuildFTSIndex(db: db)
+                            if sqlite3_prepare_v2(db, sql, -1, &statement, nil) != SQLITE_OK {
+                                throw ConversationStoreError(message: "Failed to prepare history count")
+                            }
+                        } else {
+                            throw ConversationStoreError(message: "Failed to prepare history count")
+                        }
+                    }
+                    defer { sqlite3_finalize(statement) }
+                    self.bind(statement: statement, values: parts.bindings)
+
+                    guard sqlite3_step(statement) == SQLITE_ROW else {
+                        continuation.resume(returning: 0)
+                        return
+                    }
+                    continuation.resume(returning: Int(sqlite3_column_int64(statement, 0)))
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    func fetchConversations(ids: [Int64]) async throws -> [SavedConversation] {
+        let uniqueIds = Array(Set(ids))
+        guard !uniqueIds.isEmpty else { return [] }
+        let placeholders = uniqueIds.map { _ in "?" }.joined(separator: ",")
+        let sql = """
+        SELECT id, site_name, url, content, markdown, created_at
+        FROM conversations
+        WHERE id IN (\(placeholders))
+        ORDER BY created_at DESC;
+        """
+        return try await withCheckedThrowingContinuation { continuation in
+            queue.async {
+                do {
+                    guard let db = self.db else {
+                        throw ConversationStoreError(message: "Database not available")
+                    }
+                    var statement: OpaquePointer?
+                    guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+                        throw ConversationStoreError(message: "Failed to prepare history fetch")
+                    }
+                    defer { sqlite3_finalize(statement) }
+                    for (idx, id) in uniqueIds.enumerated() {
+                        sqlite3_bind_int64(statement, Int32(idx + 1), id)
+                    }
+                    var results: [SavedConversation] = []
+                    while sqlite3_step(statement) == SQLITE_ROW {
+                        if let convo = self.readConversationRow(statement: statement) {
+                            results.append(convo)
+                        }
+                    }
+                    continuation.resume(returning: results)
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    func deleteConversations(ids: [Int64]) async throws {
+        let uniqueIds = Array(Set(ids))
+        guard !uniqueIds.isEmpty else { return }
+        let placeholders = uniqueIds.map { _ in "?" }.joined(separator: ",")
+        let deleteConversationsSQL = "DELETE FROM conversations WHERE id IN (\(placeholders));"
+        let deleteEmbeddingsSQL = "DELETE FROM conversation_embeddings WHERE conversation_id IN (\(placeholders));"
+        let deleteFTSSQL = "DELETE FROM conversations_fts WHERE rowid IN (\(placeholders));"
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            queue.async {
+                guard let db = self.db else {
+                    continuation.resume(throwing: ConversationStoreError(message: "Database not available"))
+                    return
+                }
+                do {
+                    if sqlite3_exec(db, "BEGIN IMMEDIATE;", nil, nil, nil) != SQLITE_OK {
+                        let message = String(cString: sqlite3_errmsg(db))
+                        if self.isDatabaseCorrupt(db: db) {
+                            self.resetDatabase()
+                            continuation.resume()
+                            return
+                        }
+                        throw ConversationStoreError(message: "Failed to begin transaction: \(message)")
+                    }
+
+                    try self.executeDelete(db: db, sql: deleteEmbeddingsSQL, ids: uniqueIds, errorMessage: "Failed to delete embeddings")
+                    if !self.executeDeleteAllowingRebuild(db: db, sql: deleteFTSSQL, ids: uniqueIds) {
+                        try self.rebuildFTSIndex(db: db)
+                        _ = self.executeDeleteAllowingRebuild(db: db, sql: deleteFTSSQL, ids: uniqueIds)
+                    }
+                    try self.executeDelete(db: db, sql: deleteConversationsSQL, ids: uniqueIds, errorMessage: "Failed to delete conversations")
+
+                    if sqlite3_exec(db, "COMMIT;", nil, nil, nil) != SQLITE_OK {
+                        let message = String(cString: sqlite3_errmsg(db))
+                        _ = sqlite3_exec(db, "ROLLBACK;", nil, nil, nil)
+                        throw ConversationStoreError(message: "Failed to commit delete: \(message)")
+                    }
+                    continuation.resume()
+                } catch {
+                    _ = sqlite3_exec(db, "ROLLBACK;", nil, nil, nil)
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    func fetchConversation(id: Int64) async throws -> SavedConversation? {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<SavedConversation?, Error>) in
             queue.async {
                 do {
                     guard let db = self.db else {
@@ -236,7 +461,7 @@ final class ConversationStore: @unchecked Sendable {
     }
 
     func clearHistory() async throws {
-        try await withCheckedThrowingContinuation { continuation in
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             queue.async {
                 do {
                     guard let db = self.db else {
@@ -597,6 +822,95 @@ final class ConversationStore: @unchecked Sendable {
             return "\"\(sanitized)\"*"
         }
         return escaped.joined(separator: " AND ")
+    }
+
+    private struct HistoryQueryParts {
+        let useFTS: Bool
+        let whereClause: String
+        let bindings: [BindValue]
+    }
+
+    private enum BindValue {
+        case text(String)
+        case int(Int)
+        case int64(Int64)
+    }
+
+    private func historyQueryParts(
+        keyword: String,
+        siteName: String?,
+        startTime: UInt64?,
+        endTime: UInt64?,
+        codeOnly: Bool
+    ) -> HistoryQueryParts {
+        var clauses: [String] = []
+        var bindings: [BindValue] = []
+        let trimmed = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
+        let useFTS = !trimmed.isEmpty
+        if useFTS {
+            clauses.append("conversations_fts MATCH ?")
+            bindings.append(.text(ftsQuery(from: trimmed)))
+        }
+        if let siteName, !siteName.isEmpty {
+            clauses.append("conversations.site_name = ?")
+            bindings.append(.text(siteName))
+        }
+        if let startTime {
+            clauses.append("conversations.created_at >= ?")
+            bindings.append(.int64(Int64(startTime)))
+        }
+        if let endTime {
+            clauses.append("conversations.created_at <= ?")
+            bindings.append(.int64(Int64(endTime)))
+        }
+        if codeOnly {
+            clauses.append("conversations.markdown LIKE ?")
+            bindings.append(.text("%```%"))
+        }
+
+        let whereClause = clauses.isEmpty ? "" : "WHERE " + clauses.joined(separator: " AND ")
+        return HistoryQueryParts(useFTS: useFTS, whereClause: whereClause, bindings: bindings)
+    }
+
+    private func bind(statement: OpaquePointer?, values: [BindValue]) {
+        guard let statement else { return }
+        for (index, value) in values.enumerated() {
+            let idx = Int32(index + 1)
+            switch value {
+            case .text(let text):
+                sqlite3_bind_text(statement, idx, text, -1, SQLITE_TRANSIENT)
+            case .int(let number):
+                sqlite3_bind_int(statement, idx, Int32(number))
+            case .int64(let number):
+                sqlite3_bind_int64(statement, idx, number)
+            }
+        }
+    }
+
+    private func executeDelete(db: OpaquePointer, sql: String, ids: [Int64], errorMessage: String) throws {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw ConversationStoreError(message: errorMessage)
+        }
+        defer { sqlite3_finalize(statement) }
+        for (idx, id) in ids.enumerated() {
+            sqlite3_bind_int64(statement, Int32(idx + 1), id)
+        }
+        guard sqlite3_step(statement) == SQLITE_DONE else {
+            throw ConversationStoreError(message: errorMessage)
+        }
+    }
+
+    private func executeDeleteAllowingRebuild(db: OpaquePointer, sql: String, ids: [Int64]) -> Bool {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            return false
+        }
+        defer { sqlite3_finalize(statement) }
+        for (idx, id) in ids.enumerated() {
+            sqlite3_bind_int64(statement, Int32(idx + 1), id)
+        }
+        return sqlite3_step(statement) == SQLITE_DONE
     }
 
     private func cosineSimilarity(_ lhs: [Float], _ rhs: [Float]) -> Float {

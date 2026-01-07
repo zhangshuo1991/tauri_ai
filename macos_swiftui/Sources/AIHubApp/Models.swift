@@ -178,6 +178,25 @@ enum SearchMode: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+enum HistoryTimePreset: String, CaseIterable, Identifiable {
+    case all = "all"
+    case today = "today"
+    case last7Days = "last_7_days"
+    case last30Days = "last_30_days"
+    case custom = "custom"
+
+    var id: String { rawValue }
+}
+
+struct HistoryFilter: Equatable {
+    var keyword: String
+    var siteName: String?
+    var timePreset: HistoryTimePreset
+    var customStart: Date?
+    var customEnd: Date?
+    var codeOnly: Bool
+}
+
 struct SavedConversation: Identifiable, Hashable {
     var id: Int64
     var siteName: String

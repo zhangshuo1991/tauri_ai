@@ -17,6 +17,7 @@ struct SidebarView: View {
     let onRemoveSite: (String) -> Void
     let onMovePinned: (IndexSet, Int) -> Void
     let onMoveUnpinned: (IndexSet, Int, [AiSite]) -> Void
+    let onShowHistory: () -> Void
 
     private let minWidth: Double = 64
     private let compactThreshold: Double = 100
@@ -152,12 +153,18 @@ struct SidebarView: View {
                 if isCompact {
                     // Compact mode: icon only buttons
                     CompactActionButton(icon: "plus.circle", action: showAddSite)
+                    CompactActionButton(icon: "clock", action: onShowHistory)
                     CompactActionButton(icon: "gearshape", action: showSettings)
                     CompactActionButton(icon: model.isDarkTheme ? "sun.max" : "moon", action: toggleTheme)
                     CompactActionButton(icon: "sidebar.right", action: toggleSidebar)
                 } else {
                     Button(action: showAddSite) {
                         Label(model.t("sidebar.addSite"), systemImage: "plus.circle")
+                    }
+                    .buttonStyle(SidebarActionButtonStyle())
+
+                    Button(action: onShowHistory) {
+                        Label(model.t("sidebar.history"), systemImage: "clock")
                     }
                     .buttonStyle(SidebarActionButtonStyle())
 

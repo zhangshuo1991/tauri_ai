@@ -91,8 +91,17 @@ window.chrome = { runtime: {}, loadTimes: function() {}, csi: function() {}, app
         return webview
     }
 
+    func hasWebView(tabId: String) -> Bool {
+        webviews[tabId] != nil
+    }
+
     func reload(tabId: String) {
         webviews[tabId]?.reload()
+    }
+
+    func refreshIfReady(tabId: String) {
+        guard let webview = webviews[tabId], !webview.isLoading else { return }
+        webview.reload()
     }
 
     func remove(tabId: String) {
